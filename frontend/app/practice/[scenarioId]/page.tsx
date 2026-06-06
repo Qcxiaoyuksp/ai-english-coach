@@ -9,22 +9,15 @@
 
 import { use, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { BUILT_IN_SCENARIOS, DIFFICULTY_LABELS } from '@/lib/scenarios';
+import { useRouter } from 'next/navigation';
+import { DIFFICULTY_LABELS } from '@/lib/scenarios';
 import { Scenario } from '@/types';
+import { resolveScenario } from '@/lib/storage';
+import { useIsClient } from '@/hooks/useIsClient';
 import { useVoiceSession } from '@/hooks/useVoiceSession';
 import VoiceChat from '@/components/VoiceChat';
 import TranscriptPanel from '@/components/TranscriptPanel';
 import FeedbackBubble from '@/components/FeedbackBubble';
-
-function loadCustomScenarios(): Scenario[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const saved = localStorage.getItem('custom-scenarios');
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-}
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -51,15 +44,18 @@ export default function PracticePage({
   params: Promise<{ scenarioId: string }>;
 }) {
   const { scenarioId } = use(params);
+  const isClient = useIsClient();
   const [showTranscript, setShowTranscript] = useState(true);
 
-  // Find the scenario
+  // Resolve scenario only on the client (custom scenarios live in localStorage),
+  // so SSR and the first client render agree (both render nothing).
   const scenario = useMemo(() => {
-    const builtIn = BUILT_IN_SCENARIOS.find((s) => s.id === scenarioId);
-    if (builtIn) return builtIn;
-    const custom = loadCustomScenarios().find((s) => s.id === scenarioId);
-    return custom ?? null;
-  }, [scenarioId]);
+    return isClient ? resolveScenario(scenarioId) : null;
+  }, [scenarioId, isClient]);
+
+  if (!isClient) {
+    return null;
+  }
 
   if (!scenario) {
     return (
@@ -89,14 +85,18 @@ function PracticeContent({
   setShowTranscript: (v: boolean) => void;
 }) {
   const session = useVoiceSession(scenario);
+  const router = useRouter();
   const diffInfo = DIFFICULTY_LABELS[scenario.difficulty];
   const modeLabel = useMemo(() => getVoiceModeLabel(), []);
 
   const handleEndPractice = useCallback(() => {
     if (confirm('确定要结束本次练习吗？')) {
-      session.endSession();
+      const sessionId = session.endSession();
+      if (sessionId) {
+        router.push(`/report/${sessionId}`);
+      }
     }
-  }, [session]);
+  }, [session, router]);
 
   return (
     <div className="practice-page animate-fade-in">

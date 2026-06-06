@@ -4,17 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { BUILT_IN_SCENARIOS, DIFFICULTY_LABELS } from '@/lib/scenarios';
 import { Scenario } from '@/types';
+import {
+  listCustomScenarios,
+  saveCustomScenario,
+  deleteCustomScenario,
+} from '@/lib/storage';
+import { useIsClient } from '@/hooks/useIsClient';
 import ScenarioCreator from '@/components/ScenarioCreator';
-
-function loadCustomScenarios(): Scenario[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const saved = localStorage.getItem('custom-scenarios');
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-}
 
 function checkApiKey(): boolean {
   if (typeof window === 'undefined') return false;
@@ -26,23 +22,26 @@ function checkApiKey(): boolean {
 }
 
 export default function HomePage() {
-  const [customScenarios, setCustomScenarios] = useState<Scenario[]>(loadCustomScenarios);
+  const isClient = useIsClient();
+  const [customOverride, setCustomOverride] = useState<Scenario[] | null>(null);
   const [showCreator, setShowCreator] = useState(false);
-  const [hasApiKey] = useState(checkApiKey);
+
+  // Browser-only values; default to empty/false during SSR + first render.
+  const customScenarios =
+    customOverride ?? (isClient ? listCustomScenarios() : []);
+  const hasApiKey = isClient ? checkApiKey() : false;
 
   const allScenarios = [...BUILT_IN_SCENARIOS, ...customScenarios];
 
   const handleCreateScenario = (scenario: Scenario) => {
-    const updated = [...customScenarios, scenario];
-    setCustomScenarios(updated);
-    localStorage.setItem('custom-scenarios', JSON.stringify(updated));
+    saveCustomScenario(scenario);
+    setCustomOverride(listCustomScenarios());
     setShowCreator(false);
   };
 
   const handleDeleteCustomScenario = (id: string) => {
-    const updated = customScenarios.filter((s) => s.id !== id);
-    setCustomScenarios(updated);
-    localStorage.setItem('custom-scenarios', JSON.stringify(updated));
+    deleteCustomScenario(id);
+    setCustomOverride(listCustomScenarios());
   };
 
   return (

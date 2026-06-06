@@ -17,8 +17,10 @@ import {
   VoiceSessionState,
   ChatMessage,
   Correction,
+  Session,
 } from '@/types';
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
+import { saveSession } from '@/lib/storage';
 
 // ─── Free-mode built-in responses ────────────────────────────
 const FREE_RESPONSES = [
@@ -34,7 +36,7 @@ const FREE_RESPONSES = [
 
 export interface UseVoiceSessionReturn {
   startSession: () => void;
-  endSession: () => void;
+  endSession: () => string | null;
   toggleListening: () => void;
   stopAI: () => void;
   messages: Message[];
@@ -83,6 +85,8 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const freeResponseIdx = useRef(0);
   const isProcessingRef = useRef(false);
   const messagesRef = useRef(messages);
+  const correctionsRef = useRef(corrections);
+  const startTimeRef = useRef<number>(0);
   const scenarioRef = useRef(scenario);
   const handleUserMessageRef = useRef<((text: string) => Promise<void>) | null>(null);
 
@@ -90,6 +94,10 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    correctionsRef.current = corrections;
+  }, [corrections]);
 
   useEffect(() => {
     scenarioRef.current = scenario;
@@ -229,6 +237,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     setSessionState('idle');
     setIsActive(true);
     isProcessingRef.current = false;
+    startTimeRef.current = Date.now();
 
     const starterMsg: Message = {
       id: generateId(),
@@ -246,12 +255,39 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   }, [scenario, webSpeech]);
 
   // ─── End session ───────────────────────────────────────────
-  const endSession = useCallback(() => {
+  // Persists the completed session and returns its id (or null if
+  // there was nothing worth saving — e.g. the user never spoke).
+  const endSession = useCallback((): string | null => {
     webSpeech.stopListening();
     webSpeech.stopSpeaking();
     setIsActive(false);
     setSessionState('idle');
     isProcessingRef.current = false;
+
+    const finalMessages = messagesRef.current;
+    const hasUserSpeech = finalMessages.some((m) => m.role === 'user');
+    if (!hasUserSpeech) return null;
+
+    const sc = scenarioRef.current;
+    const session: Session = {
+      id: generateId(),
+      scenarioId: sc.id,
+      scenarioName: sc.nameZh || sc.name,
+      startTime: startTimeRef.current || finalMessages[0]?.timestamp || Date.now(),
+      endTime: Date.now(),
+      messages: finalMessages,
+      corrections: correctionsRef.current,
+      voiceMode: configRef.current.voiceMode,
+      status: 'completed',
+    };
+
+    try {
+      saveSession(session);
+    } catch (err) {
+      console.error('[useVoiceSession] Failed to save session:', err);
+      return null;
+    }
+    return session.id;
   }, [webSpeech]);
 
   // ─── Toggle listening ──────────────────────────────────────

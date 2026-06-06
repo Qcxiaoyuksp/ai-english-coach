@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ApiConfig, ProviderType, VoiceMode } from '@/types';
+import { useIsClient } from '@/hooks/useIsClient';
 
 const PROVIDER_PRESETS: {
   id: ProviderType;
@@ -96,7 +97,8 @@ function loadInitialConfig(): ApiConfig {
 }
 
 export default function SettingsPage() {
-  const [config, setConfig] = useState<ApiConfig>(loadInitialConfig);
+  const isClient = useIsClient();
+  const [configOverride, setConfigOverride] = useState<ApiConfig | null>(null);
   const [testStatus, setTestStatus] = useState<
     'idle' | 'testing' | 'success' | 'error'
   >('idle');
@@ -104,9 +106,13 @@ export default function SettingsPage() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Derive config: default during SSR/first render, saved value once on client,
+  // then the user's latest edits. Avoids hydration mismatch and setState-in-effect.
+  const config = configOverride ?? (isClient ? loadInitialConfig() : DEFAULT_CONFIG);
+
   // Auto-save config
   const saveConfig = (newConfig: ApiConfig) => {
-    setConfig(newConfig);
+    setConfigOverride(newConfig);
     localStorage.setItem('api-config', JSON.stringify(newConfig));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
