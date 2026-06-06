@@ -84,6 +84,19 @@ export interface Session {
   status: SessionStatus;
 }
 
+/** An in-progress practice session, auto-saved so it can be resumed
+ *  after navigating away. Keyed by scenarioId. */
+export interface SessionDraft {
+  scenarioId: string;
+  scenarioName: string;
+  startTime: number;
+  elapsedSeconds: number;
+  messages: Message[];
+  corrections: Correction[];
+  voiceMode: VoiceMode;
+  updatedAt: number;
+}
+
 // --- Report ---
 
 export interface DimensionScore {

@@ -7,7 +7,7 @@
 
 'use client';
 
-import { use, useState, useMemo, useCallback } from 'react';
+import { use, useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { DIFFICULTY_LABELS } from '@/lib/scenarios';
@@ -108,6 +108,14 @@ function PracticeContent({
 
   const hasUserSpeech = session.messages.some((m) => m.role === 'user');
 
+  // Show a transient "resumed" banner when the session was restored from a draft.
+  const [showResumeBanner, setShowResumeBanner] = useState(session.resumed);
+  useEffect(() => {
+    if (!session.resumed) return;
+    const t = setTimeout(() => setShowResumeBanner(false), 4000);
+    return () => clearTimeout(t);
+  }, [session.resumed]);
+
   return (
     <div className="practice-page animate-fade-in">
       {/* Top Bar */}
@@ -191,6 +199,23 @@ function PracticeContent({
         ) : (
           /* Active Session */
           <>
+            {showResumeBanner && (
+              <div
+                className="animate-fade-in"
+                style={{
+                  textAlign: 'center',
+                  padding: 'var(--space-2) var(--space-4)',
+                  marginBottom: 'var(--space-3)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-accent-emerald)',
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                  borderRadius: 'var(--radius-md)',
+                }}
+              >
+                ↩️ 已恢复上次未完成的练习
+              </div>
+            )}
             <VoiceChat
               sessionState={session.sessionState}
               isActive={session.isActive}
