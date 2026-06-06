@@ -20,7 +20,7 @@ import {
   Session,
 } from '@/types';
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
-import { saveSession } from '@/lib/storage';
+import { saveSession, saveDraft, getDraft, clearDraft } from '@/lib/storage';
 
 // ─── Free-mode built-in responses ────────────────────────────
 const FREE_RESPONSES = [
@@ -48,6 +48,8 @@ export interface UseVoiceSessionReturn {
   isSupported: boolean;
   micPermission: string;
   requestMicPermission: () => Promise<string>;
+  /** True when the session was restored from a saved in-progress draft. */
+  resumed: boolean;
 }
 
 function generateId(): string {
@@ -68,11 +70,19 @@ function loadApiConfig(): ApiConfig {
 export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const webSpeech = useWebSpeech();
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [corrections, setCorrections] = useState<Correction[]>([]);
+  // Load any in-progress draft for this scenario once (client-only mount).
+  const draftRef = useRef<ReturnType<typeof getDraft> | undefined>(undefined);
+  if (draftRef.current === undefined) {
+    draftRef.current = getDraft(scenario.id);
+  }
+  const draft = draftRef.current;
+  const resumed = !!draft;
+
+  const [messages, setMessages] = useState<Message[]>(draft?.messages ?? []);
+  const [corrections, setCorrections] = useState<Correction[]>(draft?.corrections ?? []);
   const [sessionState, setSessionState] = useState<VoiceSessionState>('idle');
-  const [isActive, setIsActive] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isActive, setIsActive] = useState(resumed);
+  const [elapsedSeconds, setElapsedSeconds] = useState(draft?.elapsedSeconds ?? 0);
 
   // Derive interim transcript directly from webSpeech state (no setState in effect)
   const interimTranscript =
@@ -82,11 +92,14 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
   const configRef = useRef<ApiConfig>(loadApiConfig());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const freeResponseIdx = useRef(0);
+  const freeResponseIdx = useRef(
+    draft ? draft.messages.filter((m) => m.role === 'assistant').length : 0
+  );
   const isProcessingRef = useRef(false);
   const messagesRef = useRef(messages);
   const correctionsRef = useRef(corrections);
-  const startTimeRef = useRef<number>(0);
+  const elapsedRef = useRef(elapsedSeconds);
+  const startTimeRef = useRef<number>(draft?.startTime ?? 0);
   const listenStartRef = useRef<number>(0);
   const scenarioRef = useRef(scenario);
   const handleUserMessageRef = useRef<((text: string, meta?: { confidence?: number; durationMs?: number }) => Promise<void>) | null>(null);
@@ -101,8 +114,28 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   }, [corrections]);
 
   useEffect(() => {
+    elapsedRef.current = elapsedSeconds;
+  }, [elapsedSeconds]);
+
+  useEffect(() => {
     scenarioRef.current = scenario;
   }, [scenario]);
+
+  // ─── Auto-save in-progress draft (resume after navigating away) ───
+  useEffect(() => {
+    if (!isActive || messages.length === 0) return;
+    const sc = scenarioRef.current;
+    saveDraft({
+      scenarioId: sc.id,
+      scenarioName: sc.nameZh || sc.name,
+      startTime: startTimeRef.current || Date.now(),
+      elapsedSeconds: elapsedRef.current,
+      messages,
+      corrections,
+      voiceMode: configRef.current.voiceMode,
+      updatedAt: Date.now(),
+    });
+  }, [messages, corrections, isActive]);
 
   // ─── Timer ─────────────────────────────────────────────────
   useEffect(() => {
@@ -275,6 +308,10 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
     const finalMessages = messagesRef.current;
     const hasUserSpeech = finalMessages.some((m) => m.role === 'user');
+
+    // The session is over — drop the in-progress draft either way.
+    clearDraft(scenarioRef.current.id);
+
     if (!hasUserSpeech) return null;
 
     const sc = scenarioRef.current;
@@ -333,6 +370,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     isSupported: webSpeech.isSupported,
     micPermission: webSpeech.micPermission,
     requestMicPermission: webSpeech.requestMicPermission,
+    resumed,
   };
 }
 

@@ -13,12 +13,13 @@
 // to IndexedDB later without changing call sites.
 // ============================================================
 
-import { Session, Report, Scenario } from '@/types';
+import { Session, Report, Scenario, SessionDraft } from '@/types';
 import { BUILT_IN_SCENARIOS } from '@/lib/scenarios';
 
 const SESSIONS_KEY = 'practice-sessions';
 const REPORTS_KEY = 'practice-reports';
 const CUSTOM_SCENARIOS_KEY = 'custom-scenarios';
+const DRAFTS_KEY = 'practice-drafts';
 
 // ─── Low-level helpers (SSR-safe) ────────────────────────────
 
@@ -136,9 +137,48 @@ export function deleteCustomScenario(id: string): void {
   );
 }
 
-// ─── Convenience ─────────────────────────────────────────────
+// ─── In-progress drafts (resume support) ─────────────────────
 
-/** Resolve a scenario id against built-in scenarios first, then custom ones. */
+function readDraftMap(): Record<string, SessionDraft> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function writeDraftMap(map: Record<string, SessionDraft>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(map));
+  } catch (err) {
+    console.error('[storage] Failed to write drafts:', err);
+  }
+}
+
+/** Get the in-progress draft for a scenario, if any. */
+export function getDraft(scenarioId: string): SessionDraft | null {
+  return readDraftMap()[scenarioId] ?? null;
+}
+
+/** Save/overwrite the in-progress draft for a scenario. */
+export function saveDraft(draft: SessionDraft): void {
+  const map = readDraftMap();
+  map[draft.scenarioId] = draft;
+  writeDraftMap(map);
+}
+
+/** Remove the in-progress draft for a scenario (e.g. after finishing). */
+export function clearDraft(scenarioId: string): void {
+  const map = readDraftMap();
+  if (scenarioId in map) {
+    delete map[scenarioId];
+    writeDraftMap(map);
+  }
+}
+
+// ─── Convenience ─────────────────────────────────────────────
 export function resolveScenario(id: string): Scenario | null {
   const builtIn = BUILT_IN_SCENARIOS.find((s) => s.id === id);
   if (builtIn) return builtIn;
