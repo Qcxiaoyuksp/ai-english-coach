@@ -11,6 +11,7 @@ import {
 } from '@/lib/storage';
 import { useIsClient } from '@/hooks/useIsClient';
 import ScenarioCreator from '@/components/ScenarioCreator';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 function checkApiKey(): boolean {
   if (typeof window === 'undefined') return false;
@@ -25,6 +26,7 @@ export default function HomePage() {
   const isClient = useIsClient();
   const [customOverride, setCustomOverride] = useState<Scenario[] | null>(null);
   const [showCreator, setShowCreator] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Scenario | null>(null);
 
   // Browser-only values; default to empty/false during SSR + first render.
   const customScenarios =
@@ -39,9 +41,12 @@ export default function HomePage() {
     setShowCreator(false);
   };
 
-  const handleDeleteCustomScenario = (id: string) => {
-    deleteCustomScenario(id);
-    setCustomOverride(listCustomScenarios());
+  const confirmDeleteScenario = () => {
+    if (pendingDelete) {
+      deleteCustomScenario(pendingDelete.id);
+      setCustomOverride(listCustomScenarios());
+    }
+    setPendingDelete(null);
   };
 
   return (
@@ -81,7 +86,7 @@ export default function HomePage() {
             scenario={scenario}
             onDelete={
               scenario.isCustom
-                ? () => handleDeleteCustomScenario(scenario.id)
+                ? () => setPendingDelete(scenario)
                 : undefined
             }
           />
@@ -111,6 +116,22 @@ export default function HomePage() {
           onCreate={handleCreateScenario}
         />
       )}
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="删除自定义场景"
+        message={
+          pendingDelete
+            ? `确定要删除「${pendingDelete.nameZh || pendingDelete.name}」吗？此操作不可撤销。`
+            : ''
+        }
+        confirmText="删除"
+        cancelText="取消"
+        danger
+        onConfirm={confirmDeleteScenario}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
@@ -167,9 +188,7 @@ function ScenarioCard({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (confirm('确定要删除这个自定义场景吗？')) {
-              onDelete();
-            }
+            onDelete();
           }}
           style={{
             position: 'absolute',
