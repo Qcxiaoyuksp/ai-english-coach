@@ -25,6 +25,8 @@ export interface UseWebSpeechReturn {
   transcript: string;
   /** Whether the latest transcript is final */
   isTranscriptFinal: boolean;
+  /** Recognition confidence (0-1) of the latest final transcript, if available */
+  confidence: number | undefined;
   /** Whether STT is currently active */
   isListening: boolean;
   /** Whether TTS is currently speaking */
@@ -49,6 +51,7 @@ export function useWebSpeech(): UseWebSpeechReturn {
   const [state, setState] = useState<SpeechServiceState>('idle');
   const [transcript, setTranscript] = useState('');
   const [isTranscriptFinal, setIsTranscriptFinal] = useState(false);
+  const [confidence, setConfidence] = useState<number | undefined>(undefined);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>('unknown');
   const [isSupported, setIsSupported] = useState(false);
 
@@ -60,11 +63,14 @@ export function useWebSpeech(): UseWebSpeechReturn {
       onStateChange: (newState) => {
         setState(newState);
       },
-      onSpeechResult: (text, isFinal) => {
+      onSpeechResult: (text, isFinal, conf) => {
         setTranscript(text);
         setIsTranscriptFinal(isFinal);
-        if (isFinal && onFinalTranscriptRef.current) {
-          onFinalTranscriptRef.current(text);
+        if (isFinal) {
+          setConfidence(conf);
+          if (onFinalTranscriptRef.current) {
+            onFinalTranscriptRef.current(text);
+          }
         }
       },
       onError: (error) => {
@@ -90,6 +96,7 @@ export function useWebSpeech(): UseWebSpeechReturn {
   const startListening = useCallback(() => {
     setTranscript('');
     setIsTranscriptFinal(false);
+    setConfidence(undefined);
     managerRef.current?.startListening();
   }, []);
 
@@ -131,6 +138,7 @@ export function useWebSpeech(): UseWebSpeechReturn {
     stopSpeaking,
     transcript,
     isTranscriptFinal,
+    confidence,
     isListening: state === 'listening',
     isSpeaking: state === 'speaking',
     state,

@@ -53,6 +53,10 @@ export interface Message {
   content: string;
   timestamp: number;
   corrections?: Correction[];
+  /** STT recognition confidence (0-1) for user utterances, when available. */
+  confidence?: number;
+  /** Approximate spoken duration in ms for user utterances, when available. */
+  durationMs?: number;
 }
 
 export interface Correction {
