@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-empty-object-type */
+
 
 // Web Speech API type declarations for TypeScript
 // These are needed because the Web Speech API types are not included by default
