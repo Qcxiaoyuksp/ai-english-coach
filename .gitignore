@@ -7,6 +7,9 @@
 .kiro
 .npm-cache
 
+# ─── Vercel ──────────────────────────────────
+.vercel
+
 # ─── Dependencies ────────────────────────────
 node_modules/
 .pnp
