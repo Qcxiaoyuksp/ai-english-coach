@@ -10,10 +10,11 @@
 import { use, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { BUILT_IN_SCENARIOS, DIFFICULTY_LABELS } from '@/lib/scenarios';
-import { Scenario, Correction } from '@/types';
+import { Scenario } from '@/types';
 import { useVoiceSession } from '@/hooks/useVoiceSession';
 import VoiceChat from '@/components/VoiceChat';
 import TranscriptPanel from '@/components/TranscriptPanel';
+import FeedbackBubble from '@/components/FeedbackBubble';
 
 function loadCustomScenarios(): Scenario[] {
   if (typeof window === 'undefined') return [];
@@ -213,48 +214,11 @@ function PracticeContent({
 
             {/* Floating Corrections */}
             {session.corrections.length > 0 && (
-              <CorrectionBubbles corrections={session.corrections} />
+              <FeedbackBubble corrections={session.corrections} />
             )}
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-// ─── Correction Bubbles ──────────────────────────────────────
-
-const ERROR_TYPE_LABELS: Record<string, { icon: string; label: string }> = {
-  grammar: { icon: '🔤', label: '语法' },
-  expression: { icon: '🗣️', label: '表达' },
-  vocabulary: { icon: '📝', label: '用词' },
-};
-
-function CorrectionBubbles({ corrections }: { corrections: Correction[] }) {
-  // Show only the last 3 corrections
-  const visible = corrections.slice(-3);
-
-  return (
-    <div className="practice-corrections">
-      {visible.map((c) => {
-        const typeInfo = ERROR_TYPE_LABELS[c.errorType] || { icon: '📝', label: c.errorType };
-        return (
-          <div key={c.id} className="correction-bubble animate-fade-in-up">
-            <div className="correction-type">
-              {typeInfo.icon} {typeInfo.label}
-            </div>
-            <div className="correction-original">
-              ❌ <s>{c.original}</s>
-            </div>
-            <div className="correction-corrected">
-              ✅ {c.corrected}
-            </div>
-            {c.explanation && (
-              <div className="correction-explanation">{c.explanation}</div>
-            )}
-          </div>
-        );
-      })}
     </div>
   );
 }

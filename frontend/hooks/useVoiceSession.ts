@@ -18,6 +18,7 @@ import {
   ChatMessage,
   Correction,
 } from '@/types';
+import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
 
 // ─── Free-mode built-in responses ────────────────────────────
 const FREE_RESPONSES = [
@@ -137,9 +138,9 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
           aiResponse = FREE_RESPONSES[freeResponseIdx.current % FREE_RESPONSES.length];
           freeResponseIdx.current++;
         } else {
-          // Standard mode: call LLM API
+          // Standard mode: call LLM API with the correction tool enabled
           const chatMessages = buildChatMessages(messagesRef.current, userMsg, scenarioRef.current);
-          const result = await callChatAPI(config, chatMessages);
+          const result = await callChatAPI(config, chatMessages, [CORRECTION_TOOL]);
           aiResponse = result.content;
 
           // Handle corrections from tool calls
@@ -157,6 +158,18 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
                 setCorrections((prev) => [...prev, correction]);
               }
             }
+          }
+
+          // Fallback: some models return ONLY a tool call with empty content.
+          // Make one more call without tools so the conversation still flows.
+          if (!aiResponse.trim() && result.toolCalls && result.toolCalls.length > 0) {
+            const followUp = await callChatAPI(config, chatMessages);
+            aiResponse = followUp.content;
+          }
+
+          // Last-resort safety so TTS always has something to say.
+          if (!aiResponse.trim()) {
+            aiResponse = 'Got it. Please, go on.';
           }
         }
 
@@ -285,7 +298,7 @@ function buildChatMessages(
   scenario: Scenario,
 ): ChatMessage[] {
   const chatMessages: ChatMessage[] = [
-    { role: 'system', content: scenario.systemPrompt },
+    { role: 'system', content: buildSystemPrompt(scenario.systemPrompt) },
   ];
 
   const recentHistory = history.slice(-20);
@@ -302,6 +315,7 @@ function buildChatMessages(
 async function callChatAPI(
   config: ApiConfig,
   messages: ChatMessage[],
+  tools?: unknown[],
 ): Promise<{ content: string; toolCalls?: { name: string; arguments: Record<string, unknown> }[] }> {
   const response = await fetch('/api/chat', {
     method: 'POST',
@@ -311,6 +325,7 @@ async function callChatAPI(
       messages,
       maxTokens: 512,
       temperature: 0.8,
+      ...(tools && tools.length > 0 ? { tools } : {}),
     }),
   });
 
