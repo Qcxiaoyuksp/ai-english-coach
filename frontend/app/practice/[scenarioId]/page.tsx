@@ -18,6 +18,7 @@ import { useVoiceSession } from '@/hooks/useVoiceSession';
 import VoiceChat from '@/components/VoiceChat';
 import TranscriptPanel from '@/components/TranscriptPanel';
 import FeedbackBubble from '@/components/FeedbackBubble';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -86,17 +87,26 @@ function PracticeContent({
 }) {
   const session = useVoiceSession(scenario);
   const router = useRouter();
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
   const diffInfo = DIFFICULTY_LABELS[scenario.difficulty];
   const modeLabel = useMemo(() => getVoiceModeLabel(), []);
 
   const handleEndPractice = useCallback(() => {
-    if (confirm('确定要结束本次练习吗？')) {
-      const sessionId = session.endSession();
-      if (sessionId) {
-        router.push(`/report/${sessionId}`);
-      }
+    setShowEndConfirm(true);
+  }, []);
+
+  const confirmEndPractice = useCallback(() => {
+    setShowEndConfirm(false);
+    const sessionId = session.endSession();
+    if (sessionId) {
+      router.push(`/report/${sessionId}`);
+    } else {
+      // No user speech → no report was generated; exit cleanly to home.
+      router.push('/');
     }
   }, [session, router]);
+
+  const hasUserSpeech = session.messages.some((m) => m.role === 'user');
 
   return (
     <div className="practice-page animate-fade-in">
@@ -219,6 +229,21 @@ function PracticeContent({
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={showEndConfirm}
+        title="结束本次练习"
+        message={
+          hasUserSpeech
+            ? '确定要结束吗？结束后将生成本次练习的评估报告。'
+            : '你还没有开口说话，结束将不会生成评估报告。确定要退出吗？'
+        }
+        confirmText={hasUserSpeech ? '结束并查看报告' : '退出练习'}
+        cancelText="继续练习"
+        danger={!hasUserSpeech}
+        onConfirm={confirmEndPractice}
+        onCancel={() => setShowEndConfirm(false)}
+      />
     </div>
   );
 }
