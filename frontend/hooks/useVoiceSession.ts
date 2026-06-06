@@ -87,8 +87,9 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const messagesRef = useRef(messages);
   const correctionsRef = useRef(corrections);
   const startTimeRef = useRef<number>(0);
+  const listenStartRef = useRef<number>(0);
   const scenarioRef = useRef(scenario);
-  const handleUserMessageRef = useRef<((text: string) => Promise<void>) | null>(null);
+  const handleUserMessageRef = useRef<((text: string, meta?: { confidence?: number; durationMs?: number }) => Promise<void>) | null>(null);
 
   // Keep refs in sync via effects
   useEffect(() => {
@@ -120,7 +121,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
   // ─── Handle user message ───────────────────────────────────
   const handleUserMessage = useCallback(
-    async (text: string) => {
+    async (text: string, meta?: { confidence?: number; durationMs?: number }) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
 
@@ -133,6 +134,8 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
         role: 'user',
         content: text,
         timestamp: Date.now(),
+        confidence: meta?.confidence,
+        durationMs: meta?.durationMs,
       };
       setMessages((prev) => [...prev, userMsg]);
 
@@ -223,10 +226,16 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     if (webSpeech.isTranscriptFinal && webSpeech.transcript && !isProcessingRef.current) {
       const userText = webSpeech.transcript.trim();
       if (userText) {
-        handleUserMessageRef.current?.(userText);
+        const meta = {
+          confidence: webSpeech.confidence,
+          durationMs: listenStartRef.current
+            ? Date.now() - listenStartRef.current
+            : undefined,
+        };
+        handleUserMessageRef.current?.(userText, meta);
       }
     }
-  }, [webSpeech.isTranscriptFinal, webSpeech.transcript]);
+  }, [webSpeech.isTranscriptFinal, webSpeech.transcript, webSpeech.confidence]);
 
   // ─── Start session ─────────────────────────────────────────
   const startSession = useCallback(async () => {
@@ -299,6 +308,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
       setSessionState('idle');
     } else {
       webSpeech.startListening();
+      listenStartRef.current = Date.now();
       setSessionState('listening');
     }
   }, [sessionState, webSpeech]);

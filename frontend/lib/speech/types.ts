@@ -19,8 +19,9 @@ export interface STTService {
   isSupported(): boolean;
 
   // ─── Callbacks ────────────────────────────────────────────
-  /** Called when speech is recognized (interim or final) */
-  onResult: (transcript: string, isFinal: boolean) => void;
+  /** Called when speech is recognized (interim or final). `confidence` (0-1)
+   *  is provided for final results when the browser supplies it. */
+  onResult: (transcript: string, isFinal: boolean, confidence?: number) => void;
   /** Called when an error occurs */
   onError: (error: Error) => void;
   /** Called when the recognition session ends */

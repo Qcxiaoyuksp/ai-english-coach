@@ -1,63 +1,120 @@
 'use client';
 
-import { use, useMemo } from 'react';
+import { use, useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Session, Correction } from '@/types';
-import { getSession, resolveScenario } from '@/lib/storage';
+import { ApiConfig, Report, ReportDimensions } from '@/types';
+import { getSession, getReportBySession, saveReport, resolveScenario } from '@/lib/storage';
 import { useIsClient } from '@/hooks/useIsClient';
+import {
+  analyzeConversation,
+  buildLocalReport,
+  pronunciationScore,
+  fluencyScore,
+  type ConversationStats,
+} from '@/lib/analyzer';
+import RadarChart from '@/components/RadarChart';
 
-interface ReportData {
-  overallScore: number;
-  dimensions: {
-    name: string;
-    nameZh: string;
-    score: number;
-    feedback: string;
-  }[];
-  errors: Correction[];
-  suggestions: string[];
+const DIM_META: { key: keyof ReportDimensions; label: string }[] = [
+  { key: 'pronunciation', label: '发音' },
+  { key: 'grammar', label: '语法' },
+  { key: 'vocabulary', label: '词汇' },
+  { key: 'fluency', label: '流利度' },
+  { key: 'naturalness', label: '自然度' },
+  { key: 'taskCompletion', label: '任务完成' },
+];
+
+function loadApiConfig(): ApiConfig {
+  try {
+    const saved = localStorage.getItem('api-config');
+    if (saved) return JSON.parse(saved);
+  } catch {
+    /* ignore */
+  }
+  return { provider: 'free', voiceMode: 'free' };
 }
 
-function computeReport(sess: Session): ReportData {
-  const userMessages = sess.messages.filter((m) => m.role === 'user');
-  const totalWords = userMessages.reduce(
-    (acc, m) => acc + m.content.split(/\s+/).length,
-    0
-  );
-  const uniqueWords = new Set(
-    userMessages
-      .flatMap((m) => m.content.toLowerCase().split(/\s+/))
-      .filter((w) => w.length > 2)
-  );
-  const errorCount = sess.corrections.length;
-  const sentenceCount = userMessages.length;
+function num(v: unknown, fallback: number): number {
+  return typeof v === 'number' && isFinite(v) ? Math.round(v) : fallback;
+}
 
-  const vocabDiversity = Math.min(100, Math.round((uniqueWords.size / Math.max(totalWords, 1)) * 200));
-  const errorRate = sentenceCount > 0 ? errorCount / sentenceCount : 0;
-  const grammarScore = Math.max(40, Math.round(100 - errorRate * 50));
-  const fluencyScore = Math.min(100, Math.max(40, Math.round(60 + totalWords * 0.5)));
+/**
+ * Merge an LLM analysis with locally-measured metrics. Pronunciation and
+ * fluency are overridden with the objective heuristic scores so the report
+ * stays honest; the LLM keeps grammar/vocabulary/naturalness/taskCompletion.
+ */
+function buildGroundedReport(
+  sessionId: string,
+  llm: Record<string, unknown>,
+  stats: ConversationStats,
+  fallback: Report
+): Report {
+  const llmDims = (llm.dimensions ?? {}) as Record<string, { score?: number; feedback?: string }>;
+  const fb = fallback.dimensions;
+
+  const pron = pronunciationScore(stats.avgConfidence);
+  const flu = fluencyScore(stats.wpm, stats.avgWordsPerTurn);
+
+  const dimensions: ReportDimensions = {
+    pronunciation: fb.pronunciation, // honest, confidence-based (overrides LLM)
+    fluency: fb.fluency, // honest, WPM-based (overrides LLM)
+    grammar: {
+      score: num(llmDims.grammar?.score, fb.grammar.score),
+      feedback: llmDims.grammar?.feedback || fb.grammar.feedback,
+    },
+    vocabulary: {
+      score: num(llmDims.vocabulary?.score, fb.vocabulary.score),
+      feedback: llmDims.vocabulary?.feedback || fb.vocabulary.feedback,
+    },
+    naturalness: {
+      score: num(llmDims.naturalness?.score, fb.naturalness.score),
+      feedback: llmDims.naturalness?.feedback || fb.naturalness.feedback,
+    },
+    taskCompletion: {
+      score: num(llmDims.taskCompletion?.score, fb.taskCompletion.score),
+      feedback: llmDims.taskCompletion?.feedback || fb.taskCompletion.feedback,
+    },
+  };
+  // ensure overrides actually use local heuristic numbers
+  dimensions.pronunciation = { score: pron, feedback: fb.pronunciation.feedback };
+  dimensions.fluency = { score: flu, feedback: fb.fluency.feedback };
+
   const overallScore = Math.round(
-    (grammarScore * 0.25 + vocabDiversity * 0.2 + fluencyScore * 0.2 + 70 * 0.15 + 72 * 0.1 + 75 * 0.1)
+    dimensions.pronunciation.score * 0.2 +
+      dimensions.grammar.score * 0.2 +
+      dimensions.vocabulary.score * 0.15 +
+      dimensions.fluency.score * 0.2 +
+      dimensions.naturalness.score * 0.1 +
+      dimensions.taskCompletion.score * 0.15
   );
+
+  const errors = Array.isArray(llm.errors) && llm.errors.length > 0
+    ? (llm.errors as Record<string, string>[]).map((e) => ({
+        type: (e.type as 'grammar' | 'expression' | 'vocabulary') || 'grammar',
+        original: e.original || '',
+        corrected: e.corrected || '',
+        explanation: e.explanation || '',
+        context: '',
+      }))
+    : fallback.errors;
+
+  const suggestions = Array.isArray(llm.suggestions) && llm.suggestions.length > 0
+    ? (llm.suggestions as string[])
+    : fallback.suggestions;
+
+  const keyVocabulary = Array.isArray(llm.keyVocabulary)
+    ? (llm.keyVocabulary as { word: string; definition: string; example: string }[])
+    : [];
 
   return {
+    id: `report-${sessionId}`,
+    sessionId,
+    createdAt: Date.now(),
     overallScore,
-    dimensions: [
-      { name: 'Pronunciation', nameZh: '发音', score: 70, feedback: '发音基本清晰，部分单词需要改进' },
-      { name: 'Grammar', nameZh: '语法', score: grammarScore, feedback: `检测到 ${errorCount} 个语法错误` },
-      { name: 'Vocabulary', nameZh: '词汇', score: vocabDiversity, feedback: `使用了 ${uniqueWords.size} 个不同单词` },
-      { name: 'Fluency', nameZh: '流利度', score: fluencyScore, feedback: `共说了 ${totalWords} 个单词` },
-      { name: 'Naturalness', nameZh: '自然度', score: 72, feedback: '对话比较自然，可继续提升' },
-      { name: 'Task Completion', nameZh: '任务完成', score: 75, feedback: '基本完成了场景任务' },
-    ],
-    errors: sess.corrections,
-    suggestions: [
-      '多练习使用完整的句子来表达想法',
-      '注意时态的一致性',
-      '尝试使用更多样的词汇来替代常用词',
-      '练习使用连接词让句子更流畅',
-      '多关注常见的发音模式',
-    ],
+    dimensions,
+    errors,
+    highlights: [],
+    suggestions,
+    keyVocabulary,
   };
 }
 
@@ -70,24 +127,69 @@ export default function ReportPage({
   const isClient = useIsClient();
   const session = isClient ? getSession(sessionId) : null;
 
-  const report = useMemo<ReportData | null>(() => {
-    if (!session) return null;
-    return computeReport(session);
-  }, [session]);
+  const [report, setReport] = useState<Report | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready'>('loading');
+  const startedRef = useRef(false);
 
-  const getScenario = (scenarioId: string) => resolveScenario(scenarioId);
+  // Generate (or load cached) report after mount. Async work lives inside a
+  // nested function so we never call setState synchronously in the effect body.
+  useEffect(() => {
+    if (!isClient || startedRef.current) return;
+    const sess = getSession(sessionId);
+    if (!sess) return;
+    startedRef.current = true;
+
+    const generate = async () => {
+      const cached = getReportBySession(sessionId);
+      if (cached) {
+        setReport(cached);
+        setStatus('ready');
+        return;
+      }
+
+      const stats = analyzeConversation(sess);
+      const localReport = buildLocalReport(sess);
+      const config = loadApiConfig();
+
+      let result: Report = localReport;
+
+      if (config.apiKey && config.voiceMode !== 'free') {
+        try {
+          const res = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config, session: sess, stats }),
+          });
+          if (res.ok) {
+            const json = await res.json();
+            if (json && json.dimensions) {
+              result = buildGroundedReport(sessionId, json, stats, localReport);
+            }
+          }
+        } catch {
+          // Network/parse failure → keep the local report.
+        }
+      }
+
+      saveReport(result);
+      setReport(result);
+      setStatus('ready');
+    };
+
+    generate();
+  }, [isClient, sessionId]);
+
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return 'var(--color-accent-emerald)';
+    if (score >= 60) return 'var(--color-accent-amber)';
+    return 'var(--color-accent-rose)';
+  };
 
   const formatDuration = (start: number, end: number) => {
     const seconds = Math.round((end - start) / 1000);
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}分${s}秒`;
-  };
-
-  const getScoreColor = (score: number) => {
-    if (score >= 80) return 'var(--color-accent-emerald)';
-    if (score >= 60) return 'var(--color-accent-amber)';
-    return 'var(--color-accent-rose)';
   };
 
   if (!isClient) {
@@ -105,7 +207,23 @@ export default function ReportPage({
     );
   }
 
-  const scenario = getScenario(session.scenarioId);
+  const scenario = resolveScenario(session.scenarioId);
+
+  if (status === 'loading' || !report) {
+    return (
+      <div className="container" style={{ paddingTop: 'var(--space-16)', textAlign: 'center' }}>
+        <div className="animate-spin" style={{ fontSize: '2rem' }}>⏳</div>
+        <p style={{ color: 'var(--color-text-secondary)', marginTop: 'var(--space-4)' }}>
+          正在生成评估报告...
+        </p>
+      </div>
+    );
+  }
+
+  const radarData = DIM_META.map((d) => ({
+    label: d.label,
+    score: report.dimensions[d.key].score,
+  }));
 
   return (
     <div className="container">
@@ -121,181 +239,168 @@ export default function ReportPage({
           </p>
 
           {/* Score Circle */}
-          {report && (
-            <div className="report-score-circle" style={{ marginTop: 'var(--space-6)' }}>
-              <svg viewBox="0 0 160 160" style={{ transform: 'rotate(-90deg)' }}>
-                <circle
-                  cx="80" cy="80" r="70"
-                  fill="none"
-                  stroke="rgba(255,255,255,0.05)"
-                  strokeWidth="8"
-                />
-                <circle
-                  cx="80" cy="80" r="70"
-                  fill="none"
-                  stroke={getScoreColor(report.overallScore)}
-                  strokeWidth="8"
-                  strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 70}
-                  strokeDashoffset={2 * Math.PI * 70 * (1 - report.overallScore / 100)}
-                  style={{ transition: 'stroke-dashoffset 1.5s ease' }}
-                />
-              </svg>
-              <div className="report-score-value">
-                <div
-                  className="report-score-number gradient-text"
-                  style={{ fontSize: 'var(--text-4xl)' }}
-                >
-                  {report.overallScore}
-                </div>
-                <div className="report-score-label">综合得分</div>
+          <div className="report-score-circle" style={{ marginTop: 'var(--space-6)' }}>
+            <svg viewBox="0 0 160 160" style={{ transform: 'rotate(-90deg)' }}>
+              <circle cx="80" cy="80" r="70" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8" />
+              <circle
+                cx="80" cy="80" r="70"
+                fill="none"
+                stroke={getScoreColor(report.overallScore)}
+                strokeWidth="8"
+                strokeLinecap="round"
+                strokeDasharray={2 * Math.PI * 70}
+                strokeDashoffset={2 * Math.PI * 70 * (1 - report.overallScore / 100)}
+                style={{ transition: 'stroke-dashoffset 1.5s ease' }}
+              />
+            </svg>
+            <div className="report-score-value">
+              <div className="report-score-number gradient-text" style={{ fontSize: 'var(--text-4xl)' }}>
+                {report.overallScore}
               </div>
+              <div className="report-score-label">综合得分</div>
             </div>
-          )}
+          </div>
         </div>
 
-        {report && (
-          <>
-            {/* Dimensions Grid */}
-            <div className="report-grid">
-              {/* Score Dimensions */}
-              <div className="report-card">
-                <h3 className="report-card-title">📈 六维评分</h3>
-                {report.dimensions.map((dim) => (
-                  <div key={dim.name} className="report-dimension">
-                    <span className="report-dimension-name">{dim.nameZh}</span>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <span
-                        className="report-dimension-score"
-                        style={{ color: getScoreColor(dim.score) }}
-                      >
-                        {dim.score}
-                      </span>
-                      <div className="report-dimension-bar">
-                        <div
-                          className="report-dimension-fill"
-                          style={{ width: `${dim.score}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Suggestions */}
-              <div className="report-card">
-                <h3 className="report-card-title">💡 改进建议</h3>
-                <ul style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                  {report.suggestions.map((suggestion, i) => (
-                    <li
-                      key={i}
-                      style={{
-                        fontSize: 'var(--text-sm)',
-                        color: 'var(--color-text-secondary)',
-                        paddingLeft: 'var(--space-4)',
-                        position: 'relative',
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: 0,
-                          color: 'var(--color-accent-blue-light)',
-                        }}
-                      >
-                        •
-                      </span>
-                      {suggestion}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+        {/* Dimensions Grid */}
+        <div className="report-grid">
+          {/* Radar + Score Dimensions */}
+          <div className="report-card">
+            <h3 className="report-card-title">📈 六维评分</h3>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)' }}>
+              <RadarChart data={radarData} size={260} />
             </div>
-
-            {/* Errors */}
-            {report.errors.length > 0 && (
-              <div className="report-card" style={{ marginBottom: 'var(--space-8)' }}>
-                <h3 className="report-card-title">❌ 错误详情</h3>
-                {report.errors.map((error) => {
-                  const typeLabels: Record<string, { icon: string; label: string; color: string }> = {
-                    grammar: { icon: '🔤', label: '语法', color: 'var(--color-accent-amber)' },
-                    expression: { icon: '🗣️', label: '表达', color: 'var(--color-accent-purple)' },
-                    vocabulary: { icon: '📝', label: '用词', color: 'var(--color-accent-cyan)' },
-                  };
-                  const typeInfo = typeLabels[error.errorType] || typeLabels.grammar;
-
-                  return (
-                    <div key={error.id} className="report-error-item">
-                      <div className="report-error-type" style={{ color: typeInfo.color }}>
-                        {typeInfo.icon} {typeInfo.label}
-                      </div>
-                      <div style={{ fontSize: 'var(--text-sm)' }}>
-                        <span style={{ color: 'var(--color-accent-rose)' }}>
-                          ❌ <s>{error.original}</s>
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
-                        <span style={{ color: 'var(--color-accent-emerald)' }}>
-                          ✅ {error.corrected}
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 'var(--text-xs)',
-                          color: 'var(--color-text-muted)',
-                          marginTop: 'var(--space-2)',
-                        }}
-                      >
-                        {error.explanation}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Conversation Review */}
-            <div className="report-card" style={{ marginBottom: 'var(--space-8)' }}>
-              <h3 className="report-card-title">💬 对话回顾</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                {session.messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    style={{
-                      padding: 'var(--space-3) var(--space-4)',
-                      background:
-                        msg.role === 'user'
-                          ? 'rgba(59, 130, 246, 0.08)'
-                          : 'var(--color-bg-glass)',
-                      borderRadius: 'var(--radius-md)',
-                      fontSize: 'var(--text-sm)',
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        fontSize: 'var(--text-xs)',
-                        color: 'var(--color-text-muted)',
-                      }}
-                    >
-                      {msg.role === 'user' ? '🙋 You' : '🤖 AI'}
+            {DIM_META.map((d) => {
+              const dim = report.dimensions[d.key];
+              return (
+                <div key={d.key} className="report-dimension">
+                  <span className="report-dimension-name">{d.label}</span>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <span className="report-dimension-score" style={{ color: getScoreColor(dim.score) }}>
+                      {dim.score}
                     </span>
-                    <p style={{ marginTop: 'var(--space-1)', lineHeight: 'var(--leading-relaxed)' }}>
-                      {msg.content}
-                    </p>
+                    <div className="report-dimension-bar">
+                      <div className="report-dimension-fill" style={{ width: `${dim.score}%` }} />
+                    </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Dimension feedback + Suggestions */}
+          <div className="report-card">
+            <h3 className="report-card-title">🧭 维度点评</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginBottom: 'var(--space-5)' }}>
+              {DIM_META.map((d) => (
+                <div key={d.key} style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+                  <strong style={{ color: 'var(--color-text-primary)' }}>{d.label}：</strong>
+                  {report.dimensions[d.key].feedback}
+                </div>
+              ))}
             </div>
-          </>
+
+            <h3 className="report-card-title">💡 改进建议</h3>
+            <ul style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              {report.suggestions.map((suggestion, i) => (
+                <li
+                  key={i}
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    color: 'var(--color-text-secondary)',
+                    paddingLeft: 'var(--space-4)',
+                    position: 'relative',
+                  }}
+                >
+                  <span style={{ position: 'absolute', left: 0, color: 'var(--color-accent-blue-light)' }}>•</span>
+                  {suggestion}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Key Vocabulary */}
+        {report.keyVocabulary.length > 0 && (
+          <div className="report-card" style={{ marginBottom: 'var(--space-8)' }}>
+            <h3 className="report-card-title">📚 关键词汇</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              {report.keyVocabulary.map((v, i) => (
+                <div key={i} style={{ fontSize: 'var(--text-sm)' }}>
+                  <strong style={{ color: 'var(--color-accent-cyan)' }}>{v.word}</strong>
+                  <span style={{ color: 'var(--color-text-muted)' }}> — {v.definition}</span>
+                  {v.example && (
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                      e.g. {v.example}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
+
+        {/* Errors */}
+        {report.errors.length > 0 && (
+          <div className="report-card" style={{ marginBottom: 'var(--space-8)' }}>
+            <h3 className="report-card-title">❌ 错误详情</h3>
+            {report.errors.map((error, i) => {
+              const typeLabels: Record<string, { icon: string; label: string; color: string }> = {
+                grammar: { icon: '🔤', label: '语法', color: 'var(--color-accent-amber)' },
+                expression: { icon: '🗣️', label: '表达', color: 'var(--color-accent-purple)' },
+                vocabulary: { icon: '📝', label: '用词', color: 'var(--color-accent-cyan)' },
+              };
+              const typeInfo = typeLabels[error.type] || typeLabels.grammar;
+              return (
+                <div key={i} className="report-error-item">
+                  <div className="report-error-type" style={{ color: typeInfo.color }}>
+                    {typeInfo.icon} {typeInfo.label}
+                  </div>
+                  <div style={{ fontSize: 'var(--text-sm)' }}>
+                    <span style={{ color: 'var(--color-accent-rose)' }}>
+                      ❌ <s>{error.original}</s>
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 'var(--text-sm)', marginTop: 'var(--space-1)' }}>
+                    <span style={{ color: 'var(--color-accent-emerald)' }}>✅ {error.corrected}</span>
+                  </div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-2)' }}>
+                    {error.explanation}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Conversation Review */}
+        <div className="report-card" style={{ marginBottom: 'var(--space-8)' }}>
+          <h3 className="report-card-title">💬 对话回顾</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            {session.messages.map((msg) => (
+              <div
+                key={msg.id}
+                style={{
+                  padding: 'var(--space-3) var(--space-4)',
+                  background: msg.role === 'user' ? 'rgba(59, 130, 246, 0.08)' : 'var(--color-bg-glass)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: 'var(--text-sm)',
+                }}
+              >
+                <span style={{ fontWeight: 600, fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                  {msg.role === 'user' ? '🙋 You' : '🤖 AI'}
+                </span>
+                <p style={{ marginTop: 'var(--space-1)', lineHeight: 'var(--leading-relaxed)' }}>
+                  {msg.content}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* Actions */}
         <div className="report-actions">
-          <Link
-            href={`/practice/${session.scenarioId}`}
-            className="btn btn-primary btn-lg"
-          >
+          <Link href={`/practice/${session.scenarioId}`} className="btn btn-primary btn-lg">
             🔄 再次练习
           </Link>
           <Link href="/" className="btn btn-secondary btn-lg">

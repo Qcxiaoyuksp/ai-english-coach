@@ -14,8 +14,9 @@ import { WebSpeechTTS } from './web-speech-tts';
 export interface SpeechManagerCallbacks {
   /** Called when the overall state changes */
   onStateChange?: (state: SpeechServiceState) => void;
-  /** Called when speech is recognized */
-  onSpeechResult?: (transcript: string, isFinal: boolean) => void;
+  /** Called when speech is recognized. `confidence` (0-1) is provided for
+   *  final results when the browser supplies it. */
+  onSpeechResult?: (transcript: string, isFinal: boolean, confidence?: number) => void;
   /** Called when an error occurs */
   onError?: (error: Error) => void;
   /** Called when TTS finishes speaking */
@@ -45,8 +46,8 @@ export class SpeechManager {
       interimResults: true,
     });
 
-    this.stt.onResult = (transcript, isFinal) => {
-      this.callbacks.onSpeechResult?.(transcript, isFinal);
+    this.stt.onResult = (transcript, isFinal, confidence) => {
+      this.callbacks.onSpeechResult?.(transcript, isFinal, confidence);
     };
 
     this.stt.onError = (error) => {

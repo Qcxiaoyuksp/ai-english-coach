@@ -27,7 +27,7 @@ export class WebSpeechSTT implements STTService {
   private maxAlternatives = 1;
 
   // ─── Callbacks ──────────────────────────────────────────────
-  onResult: (transcript: string, isFinal: boolean) => void = () => {};
+  onResult: (transcript: string, isFinal: boolean, confidence?: number) => void = () => {};
   onError: (error: Error) => void = () => {};
   onEnd: () => void = () => {};
 
@@ -82,11 +82,15 @@ export class WebSpeechSTT implements STTService {
     this.recognition.onresult = (event: SpeechRecognitionEvent) => {
       let finalTranscript = '';
       let interimTranscript = '';
+      let finalConfidence: number | undefined;
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
           finalTranscript += result[0].transcript;
+          // Capture recognition confidence (0-1) when the browser provides it.
+          const c = result[0].confidence;
+          if (typeof c === 'number' && c > 0) finalConfidence = c;
         } else {
           interimTranscript += result[0].transcript;
         }
@@ -99,7 +103,7 @@ export class WebSpeechSTT implements STTService {
 
       // Report final result
       if (finalTranscript) {
-        this.onResult(finalTranscript.trim(), true);
+        this.onResult(finalTranscript.trim(), true, finalConfidence);
       }
     };
 

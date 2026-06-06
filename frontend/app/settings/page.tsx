@@ -96,6 +96,27 @@ function loadInitialConfig(): ApiConfig {
   return DEFAULT_CONFIG;
 }
 
+// Per-provider memory of { apiKey, baseUrl, model } so switching providers
+// back and forth doesn't lose previously entered values.
+type ProviderProfile = { apiKey?: string; baseUrl?: string; model?: string };
+
+function loadProfiles(): Record<string, ProviderProfile> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('provider-profiles') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveProfiles(profiles: Record<string, ProviderProfile>): void {
+  try {
+    localStorage.setItem('provider-profiles', JSON.stringify(profiles));
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function SettingsPage() {
   const isClient = useIsClient();
   const [configOverride, setConfigOverride] = useState<ApiConfig | null>(null);
@@ -121,14 +142,37 @@ export default function SettingsPage() {
   const updateConfig = (partial: Partial<ApiConfig>) => {
     const newConfig = { ...config, ...partial };
     saveConfig(newConfig);
+    // A previous "connection successful" result is stale once the provider or
+    // any credential changes — reset it.
+    if (
+      'provider' in partial ||
+      'apiKey' in partial ||
+      'baseUrl' in partial ||
+      'model' in partial
+    ) {
+      setTestStatus('idle');
+      setTestMessage('');
+    }
   };
 
   // Select provider preset
   const selectProvider = (preset: (typeof PROVIDER_PRESETS)[number]) => {
+    // Remember the current provider's credentials before switching away.
+    const profiles = loadProfiles();
+    profiles[config.provider] = {
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: config.model,
+    };
+    saveProfiles(profiles);
+
+    // Restore the target provider's saved values, falling back to its presets.
+    const saved = profiles[preset.id];
     updateConfig({
       provider: preset.id,
-      baseUrl: preset.defaultBaseUrl,
-      model: preset.defaultModel,
+      apiKey: saved?.apiKey ?? '',
+      baseUrl: saved?.baseUrl ?? preset.defaultBaseUrl,
+      model: saved?.model ?? preset.defaultModel,
       voiceMode:
         preset.id === 'openai'
           ? config.voiceMode
