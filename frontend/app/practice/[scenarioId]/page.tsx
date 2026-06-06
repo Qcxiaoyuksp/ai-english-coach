@@ -1,0 +1,260 @@
+// ============================================================
+// Practice Page — Voice Conversation Interface
+// ============================================================
+// The main practice page where users engage in spoken English
+// conversations with the AI coach in the selected scenario.
+// ============================================================
+
+'use client';
+
+import { use, useState, useMemo, useCallback } from 'react';
+import Link from 'next/link';
+import { BUILT_IN_SCENARIOS, DIFFICULTY_LABELS } from '@/lib/scenarios';
+import { Scenario, Correction } from '@/types';
+import { useVoiceSession } from '@/hooks/useVoiceSession';
+import VoiceChat from '@/components/VoiceChat';
+import TranscriptPanel from '@/components/TranscriptPanel';
+
+function loadCustomScenarios(): Scenario[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = localStorage.getItem('custom-scenarios');
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function getVoiceModeLabel(): string {
+  if (typeof window === 'undefined') return '免费模式';
+  try {
+    const config = localStorage.getItem('api-config');
+    if (config) {
+      const parsed = JSON.parse(config);
+      if (parsed.voiceMode === 'realtime') return '高级模式';
+      if (parsed.apiKey) return '标准模式';
+    }
+  } catch { /* ignore */ }
+  return '免费模式';
+}
+
+export default function PracticePage({
+  params,
+}: {
+  params: Promise<{ scenarioId: string }>;
+}) {
+  const { scenarioId } = use(params);
+  const [showTranscript, setShowTranscript] = useState(true);
+
+  // Find the scenario
+  const scenario = useMemo(() => {
+    const builtIn = BUILT_IN_SCENARIOS.find((s) => s.id === scenarioId);
+    if (builtIn) return builtIn;
+    const custom = loadCustomScenarios().find((s) => s.id === scenarioId);
+    return custom ?? null;
+  }, [scenarioId]);
+
+  if (!scenario) {
+    return (
+      <div className="container" style={{ paddingTop: 'var(--space-16)', textAlign: 'center' }}>
+        <h1>场景未找到</h1>
+        <p style={{ color: 'var(--color-text-secondary)', marginTop: 'var(--space-4)' }}>
+          无法找到 ID 为 &quot;{scenarioId}&quot; 的练习场景。
+        </p>
+        <Link href="/" className="btn btn-primary" style={{ marginTop: 'var(--space-6)' }}>
+          返回首页
+        </Link>
+      </div>
+    );
+  }
+
+  return <PracticeContent scenario={scenario} showTranscript={showTranscript} setShowTranscript={setShowTranscript} />;
+}
+
+// Separated to use hooks conditionally safe
+function PracticeContent({
+  scenario,
+  showTranscript,
+  setShowTranscript,
+}: {
+  scenario: Scenario;
+  showTranscript: boolean;
+  setShowTranscript: (v: boolean) => void;
+}) {
+  const session = useVoiceSession(scenario);
+  const diffInfo = DIFFICULTY_LABELS[scenario.difficulty];
+  const modeLabel = useMemo(() => getVoiceModeLabel(), []);
+
+  const handleEndPractice = useCallback(() => {
+    if (confirm('确定要结束本次练习吗？')) {
+      session.endSession();
+    }
+  }, [session]);
+
+  return (
+    <div className="practice-page animate-fade-in">
+      {/* Top Bar */}
+      <div className="practice-topbar">
+        <div className="practice-topbar-inner container">
+          <Link href="/" className="btn btn-ghost btn-sm">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+            返回
+          </Link>
+
+          <div className="practice-topbar-center">
+            <span style={{ marginRight: 'var(--space-2)' }}>{scenario.icon}</span>
+            {scenario.nameZh}
+            <span className={`badge badge-${scenario.difficulty}`} style={{ marginLeft: 'var(--space-2)', fontSize: 'var(--text-xs)' }}>
+              {diffInfo.labelZh}
+            </span>
+          </div>
+
+          <div className="practice-timer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            {formatTime(session.elapsedSeconds)}
+            <span className="badge badge-beginner" style={{ marginLeft: 'var(--space-2)', fontSize: '0.65rem', padding: '2px 8px' }}>
+              {modeLabel}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="practice-content container">
+        {!session.isActive ? (
+          /* Start Screen */
+          <div className="practice-start animate-fade-in-up">
+            <div className="practice-start-icon">{scenario.icon}</div>
+            <h2 className="practice-start-title">{scenario.name}</h2>
+            <p className="practice-start-desc">{scenario.descriptionZh}</p>
+
+            {/* Browser Support Check */}
+            {!session.isSupported && (
+              <div
+                style={{
+                  padding: 'var(--space-4)',
+                  background: 'rgba(244, 63, 94, 0.1)',
+                  border: '1px solid rgba(244, 63, 94, 0.2)',
+                  borderRadius: 'var(--radius-md)',
+                  marginBottom: 'var(--space-4)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-accent-rose)',
+                }}
+              >
+                ⚠️ 您的浏览器不支持语音识别。请使用 Chrome 或 Edge 浏览器以获得最佳体验。
+              </div>
+            )}
+
+            <button
+              className="btn btn-primary btn-lg"
+              onClick={session.startSession}
+              disabled={!session.isSupported}
+              id="start-practice-btn"
+            >
+              🎙️ 开始练习
+            </button>
+
+            {/* Key Vocabulary Preview */}
+            <div className="practice-vocab">
+              <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+                📚 核心词汇
+              </p>
+              <div className="practice-vocab-list">
+                {scenario.keyVocabulary.map((word) => (
+                  <span key={word} className="practice-vocab-chip">{word}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Active Session */
+          <>
+            <VoiceChat
+              sessionState={session.sessionState}
+              isActive={session.isActive}
+              interimTranscript={session.interimTranscript}
+              onToggleListening={session.toggleListening}
+              onStopAI={session.stopAI}
+              scenarioIcon={scenario.icon}
+            />
+
+            {/* Toggle transcript button */}
+            <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
+              <button
+                className={`btn btn-sm ${showTranscript ? 'btn-secondary' : 'btn-ghost'}`}
+                onClick={() => setShowTranscript(!showTranscript)}
+              >
+                💬 {showTranscript ? '隐藏字幕' : '显示字幕'}
+              </button>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={handleEndPractice}
+                id="end-practice-btn"
+              >
+                ⏹ 结束练习
+              </button>
+            </div>
+
+            {/* Transcript Panel */}
+            {showTranscript && (
+              <TranscriptPanel messages={session.messages} />
+            )}
+
+            {/* Floating Corrections */}
+            {session.corrections.length > 0 && (
+              <CorrectionBubbles corrections={session.corrections} />
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Correction Bubbles ──────────────────────────────────────
+
+const ERROR_TYPE_LABELS: Record<string, { icon: string; label: string }> = {
+  grammar: { icon: '🔤', label: '语法' },
+  expression: { icon: '🗣️', label: '表达' },
+  vocabulary: { icon: '📝', label: '用词' },
+};
+
+function CorrectionBubbles({ corrections }: { corrections: Correction[] }) {
+  // Show only the last 3 corrections
+  const visible = corrections.slice(-3);
+
+  return (
+    <div className="practice-corrections">
+      {visible.map((c) => {
+        const typeInfo = ERROR_TYPE_LABELS[c.errorType] || { icon: '📝', label: c.errorType };
+        return (
+          <div key={c.id} className="correction-bubble animate-fade-in-up">
+            <div className="correction-type">
+              {typeInfo.icon} {typeInfo.label}
+            </div>
+            <div className="correction-original">
+              ❌ <s>{c.original}</s>
+            </div>
+            <div className="correction-corrected">
+              ✅ {c.corrected}
+            </div>
+            {c.explanation && (
+              <div className="correction-explanation">{c.explanation}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
