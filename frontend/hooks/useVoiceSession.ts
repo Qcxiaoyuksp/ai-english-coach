@@ -84,10 +84,14 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const [isActive, setIsActive] = useState(resumed);
   const [elapsedSeconds, setElapsedSeconds] = useState(draft?.elapsedSeconds ?? 0);
 
-  // Derive interim transcript directly from webSpeech state (no setState in effect)
+  // Live preview while listening: show the accumulated final text plus the
+  // current interim chunk. Submission happens only when the user taps stop.
   const interimTranscript =
-    !webSpeech.isTranscriptFinal && webSpeech.state === 'listening'
-      ? webSpeech.transcript
+    webSpeech.state === 'listening'
+      ? [webSpeech.finalTranscript, webSpeech.interimTranscript]
+          .filter(Boolean)
+          .join(' ')
+          .trim()
       : '';
 
   const configRef = useRef<ApiConfig>(loadApiConfig());
@@ -254,22 +258,6 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     handleUserMessageRef.current = handleUserMessage;
   }, [handleUserMessage]);
 
-  // ─── Handle final transcript → send to AI ─────────────────
-  useEffect(() => {
-    if (webSpeech.isTranscriptFinal && webSpeech.transcript && !isProcessingRef.current) {
-      const userText = webSpeech.transcript.trim();
-      if (userText) {
-        const meta = {
-          confidence: webSpeech.confidence,
-          durationMs: listenStartRef.current
-            ? Date.now() - listenStartRef.current
-            : undefined,
-        };
-        handleUserMessageRef.current?.(userText, meta);
-      }
-    }
-  }, [webSpeech.isTranscriptFinal, webSpeech.transcript, webSpeech.confidence]);
-
   // ─── Start session ─────────────────────────────────────────
   const startSession = useCallback(async () => {
     configRef.current = loadApiConfig();
@@ -337,12 +325,27 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   }, [webSpeech]);
 
   // ─── Toggle listening ──────────────────────────────────────
+  // Tap once to start recording; tap again to stop. Stopping submits the
+  // entire accumulated utterance to the AI — natural pauses no longer cut
+  // the user off mid-sentence.
   const toggleListening = useCallback(() => {
     if (sessionState === 'speaking' || sessionState === 'processing') return;
 
     if (webSpeech.isListening) {
       webSpeech.stopListening();
-      setSessionState('idle');
+      const { transcript, confidence } = webSpeech.getResult();
+      const userText = transcript.trim();
+      if (userText && !isProcessingRef.current) {
+        const meta = {
+          confidence,
+          durationMs: listenStartRef.current
+            ? Date.now() - listenStartRef.current
+            : undefined,
+        };
+        handleUserMessageRef.current?.(userText, meta);
+      } else {
+        setSessionState('idle');
+      }
     } else {
       webSpeech.startListening();
       listenStartRef.current = Date.now();
