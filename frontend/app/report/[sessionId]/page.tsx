@@ -2,9 +2,10 @@
 
 import { use, useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ApiConfig, Report, ReportDimensions } from '@/types';
+import { Report, ReportDimensions } from '@/types';
 import { getSession, getReportBySession, saveReport, resolveScenario } from '@/lib/storage';
 import { useIsClient } from '@/hooks/useIsClient';
+import { loadApiConfig, usesBuiltinLLM } from '@/lib/config';
 import {
   analyzeConversation,
   buildLocalReport,
@@ -22,16 +23,6 @@ const DIM_META: { key: keyof ReportDimensions; label: string }[] = [
   { key: 'naturalness', label: '自然度' },
   { key: 'taskCompletion', label: '任务完成' },
 ];
-
-function loadApiConfig(): ApiConfig {
-  try {
-    const saved = localStorage.getItem('api-config');
-    if (saved) return JSON.parse(saved);
-  } catch {
-    /* ignore */
-  }
-  return { provider: 'free', voiceMode: 'free' };
-}
 
 function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && isFinite(v) ? Math.round(v) : fallback;
@@ -153,12 +144,17 @@ export default function ReportPage({
 
       let result: Report = localReport;
 
-      if (config.apiKey && config.voiceMode !== 'free') {
+      // Use the LLM analyzer for non-free modes: built-in LLM (server key) or
+      // the user's own key. Falls back to the local report on any failure.
+      const useServerKey = usesBuiltinLLM(config);
+      const canAnalyze =
+        config.voiceMode !== 'free' && (useServerKey || !!config.apiKey);
+      if (canAnalyze) {
         try {
           const res = await fetch('/api/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ config, session: sess, stats }),
+            body: JSON.stringify({ config, session: sess, stats, useServerKey }),
           });
           if (res.ok) {
             const json = await res.json();

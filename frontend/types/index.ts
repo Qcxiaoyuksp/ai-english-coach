@@ -4,7 +4,11 @@
 
 // --- Voice & Provider Modes ---
 
-export type VoiceMode = 'free' | 'standard' | 'realtime';
+export type VoiceMode = 'free' | 'standard' | 'advanced';
+
+/** LLM source for standard/advanced modes: the server-side built-in (Zhipu)
+ *  or the user's own configured provider/key. */
+export type LLMSource = 'builtin' | 'custom';
 
 export type ProviderType =
   | 'openai'
@@ -32,30 +36,32 @@ export interface ApiConfig {
   voiceMode: VoiceMode;
   ttsVoice?: string;
   ttsRate?: number;
+  // ─── LLM source (standard/advanced) ────────────────────────
+  /** 'builtin' uses the server-side built-in LLM (FREE_LLM_*, Zhipu);
+   *  'custom' uses the user's configured provider/apiKey. Free mode is always
+   *  builtin. Defaults to 'builtin' so the app works without a user key. */
+  llmSource?: LLMSource;
   // ─── TTS (text-to-speech) output ───────────────────────────
-  /** Engine for the AI's voice. 'browser' (default) uses the free Web Speech
-   *  SpeechSynthesis; 'api' uses a cloud TTS (Xiaomi MiMo) for natural audio. */
-  ttsSource?: TTSSource;
-  /** Preset voice name for the API TTS (e.g. Xiaomi 'Chloe'/'Mia'/'Milo'/'Dean'). */
+  /** Engine is derived from voiceMode (free→browser, standard/advanced→小米 api).
+   *  Preset voice name for the API TTS (Xiaomi 'Chloe'/'Mia'/'Milo'/'Dean'). */
   ttsApiVoice?: string;
-  /** Optional user-supplied TTS API key. When blank, the server-side built-in
-   *  key (XIAOMI_TTS_API_KEY) is used so no key is exposed to the browser. */
+  /** Advanced mode only: use a user-supplied TTS API instead of the built-in. */
+  ttsUseCustomApi?: boolean;
+  /** User-supplied TTS API key (advanced mode, when ttsUseCustomApi). */
   ttsApiKey?: string;
-  /** Optional override for the TTS API base URL (defaults to Xiaomi MiMo). */
+  /** Override for the TTS API base URL (advanced custom). */
   ttsApiBaseUrl?: string;
-  /** Optional override for the TTS model (defaults to mimo-v2.5-tts). */
+  /** Override for the TTS model (advanced custom). */
   ttsApiModel?: string;
   // ─── ASR (speech-to-text) input ────────────────────────────
-  /** Engine for transcribing the user. 'browser' (default) uses Web Speech;
-   *  'api' records via MediaRecorder and transcribes through a cloud ASR
-   *  (SiliconFlow), which is more accurate and avoids pause-based cutoffs. */
-  asrSource?: ASRSource;
-  /** ASR model id (e.g. 'FunAudioLLM/SenseVoiceSmall' or 'TeleAI/TeleSpeechASR'). */
+  /** Engine is derived from voiceMode (advanced→api 硅基, else browser).
+   *  ASR model id for the cloud engine (e.g. 'FunAudioLLM/SenseVoiceSmall'). */
   asrApiModel?: string;
-  /** Optional user-supplied ASR API key. When blank, the server-side built-in
-   *  key (SILICONFLOW_ASR_API_KEY) is used so no key is exposed to the browser. */
+  /** Advanced mode only: use a user-supplied ASR API instead of the built-in. */
+  asrUseCustomApi?: boolean;
+  /** User-supplied ASR API key (advanced mode, when asrUseCustomApi). */
   asrApiKey?: string;
-  /** Optional override for the ASR API base URL (defaults to SiliconFlow). */
+  /** Override for the ASR API base URL (advanced custom). */
   asrApiBaseUrl?: string;
 }
 

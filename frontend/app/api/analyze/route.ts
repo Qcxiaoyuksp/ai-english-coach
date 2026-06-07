@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { chatWithProvider } from '@/lib/ai-providers/provider';
-import { ApiConfig, Session } from '@/types';
+import { ApiConfig, ProviderType, Session } from '@/types';
 import { ConversationStats } from '@/lib/analyzer';
+
+/** Server-side built-in LLM config (Zhipu), shared with /api/chat. */
+function getBuiltinConfig(): ApiConfig | null {
+  const apiKey = process.env.FREE_LLM_API_KEY;
+  if (!apiKey) return null;
+  return {
+    provider: (process.env.FREE_LLM_PROVIDER as ProviderType) || 'zhipu',
+    apiKey,
+    baseUrl:
+      process.env.FREE_LLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
+    model: process.env.FREE_LLM_MODEL || 'glm-4.5-air',
+    voiceMode: 'free',
+  };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,13 +24,34 @@ export async function POST(request: NextRequest) {
       config,
       session,
       stats,
-    }: { config: ApiConfig; session: Session; stats?: ConversationStats } = body;
+      useServerKey,
+    }: {
+      config: ApiConfig;
+      session: Session;
+      stats?: ConversationStats;
+      useServerKey?: boolean;
+    } = body;
 
-    if (!config?.apiKey || !session) {
-      return NextResponse.json(
-        { error: '缺少必要参数' },
-        { status: 400 }
-      );
+    if (!session) {
+      return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
+    }
+
+    // Resolve the effective LLM config: built-in (server key) or user's own.
+    let effectiveConfig: ApiConfig;
+    if (useServerKey) {
+      const builtin = getBuiltinConfig();
+      if (!builtin) {
+        return NextResponse.json(
+          { error: 'BUILTIN_LLM_UNAVAILABLE' },
+          { status: 503 },
+        );
+      }
+      effectiveConfig = builtin;
+    } else {
+      if (!config?.apiKey) {
+        return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
+      }
+      effectiveConfig = config;
     }
 
     // Build the analysis prompt
@@ -78,7 +113,7 @@ Assessment guidelines:
 - Write all feedback and suggestions in Chinese
 - Write vocabulary definitions and examples in English`;
 
-    const response = await chatWithProvider(config, [
+    const response = await chatWithProvider(effectiveConfig, [
       { role: 'user', content: analysisPrompt },
     ], {
       temperature: 0.3,

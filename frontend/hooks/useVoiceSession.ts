@@ -3,7 +3,7 @@
 // ============================================================
 // Manages the entire conversation lifecycle: speech recognition,
 // AI response generation, TTS playback, message history, and
-// session timing. Supports free/standard/realtime modes.
+// session timing. Supports free/standard/advanced modes.
 // ============================================================
 
 'use client';
@@ -24,6 +24,12 @@ import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
 import { generateFreeReply } from '@/lib/free-coach';
 import { saveSession, saveDraft, getDraft, clearDraft } from '@/lib/storage';
 import { AudioRecorder, transcribeAudio } from '@/lib/speech/recorder';
+import {
+  loadApiConfig,
+  usesBuiltinLLM,
+  effectiveAsrSource,
+  effectiveTtsSource,
+} from '@/lib/config';
 
 export interface UseVoiceSessionReturn {
   startSession: () => void;
@@ -47,35 +53,39 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
-function loadApiConfig(): ApiConfig {
-  if (typeof window === 'undefined') {
-    return { provider: 'free', voiceMode: 'free' };
-  }
-  try {
-    const saved = localStorage.getItem('api-config');
-    if (saved) return JSON.parse(saved);
-  } catch { /* ignore */ }
-  return { provider: 'free', voiceMode: 'free' };
-}
-
-/** Assemble TTS options from the current config. When the user picks the cloud
- *  TTS, the engine is 'api' (with optional own-key overrides); otherwise the
- *  free browser SpeechSynthesis is used. */
+/** Assemble TTS options from the current config. The engine follows the voice
+ *  mode (free→browser, standard/advanced→小米 api). In advanced mode the user
+ *  may supply their own TTS API credentials; otherwise the server built-in is
+ *  used (key stays server-side). */
 function buildTTSOptions(config: ApiConfig): TTSOptions {
   const rate = config.ttsRate ?? 1.0;
-  if (config.ttsSource === 'api') {
+  if (effectiveTtsSource(config) === 'api') {
+    const useCustom = config.voiceMode === 'advanced' && !!config.ttsUseCustomApi;
     return {
       rate,
       source: 'api',
       apiVoice: config.ttsApiVoice,
-      apiConfig: {
-        apiKey: config.ttsApiKey,
-        baseUrl: config.ttsApiBaseUrl,
-        model: config.ttsApiModel,
-      },
+      apiConfig: useCustom
+        ? {
+            apiKey: config.ttsApiKey,
+            baseUrl: config.ttsApiBaseUrl,
+            model: config.ttsApiModel,
+          }
+        : undefined,
     };
   }
   return { rate, source: 'browser' };
+}
+
+/** ASR credentials to send for cloud transcription. Custom creds only when the
+ *  user opted in (advanced mode); otherwise the server built-in key is used. */
+function buildAsrConfig(config: ApiConfig): ApiConfig {
+  const useCustom = config.voiceMode === 'advanced' && !!config.asrUseCustomApi;
+  return {
+    ...config,
+    asrApiKey: useCustom ? config.asrApiKey : undefined,
+    asrApiBaseUrl: useCustom ? config.asrApiBaseUrl : undefined,
+  };
 }
 
 export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
@@ -194,11 +204,11 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
       try {
         const config = configRef.current;
-        // Free mode is now powered by a server-side built-in LLM (key stays on
-        // the server). Standard mode uses the user's configured key. Either way
-        // we enable the correction tool. If the LLM is unavailable we fall back
-        // to local scripted replies so the session never breaks.
-        const useServerKey = config.voiceMode === 'free';
+        // LLM source: free mode and "builtin" use the server-side key (via
+        // /api/chat useServerKey); "custom" uses the user's configured key.
+        // Either way the correction tool is enabled. If the built-in LLM is
+        // unavailable we fall back to local scripted replies.
+        const useServerKey = usesBuiltinLLM(config);
         const canUseLLM = useServerKey || !!config.apiKey;
 
         let aiResponse = '';
@@ -391,7 +401,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
       return;
     }
 
-    const useApiAsr = configRef.current.asrSource === 'api';
+    const useApiAsr = effectiveAsrSource(configRef.current) === 'api';
 
     // ─── Cloud ASR (record → transcribe) ─────────────────────
     if (useApiAsr) {
@@ -408,7 +418,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
           try {
             if (!recorder) throw new Error('录音未开始');
             const blob = await recorder.stop();
-            const text = await transcribeAudio(blob, configRef.current);
+            const text = await transcribeAudio(blob, buildAsrConfig(configRef.current));
             if (text && !isProcessingRef.current) {
               await handleUserMessageRef.current?.(text, { durationMs });
             } else {
@@ -476,7 +486,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   // Capability depends on the selected ASR engine: cloud ASR needs
   // MediaRecorder (works in Edge/Firefox too), browser ASR needs Web Speech.
   const isSupported =
-    configRef.current.asrSource === 'api'
+    effectiveAsrSource(configRef.current) === 'api'
       ? AudioRecorder.isSupported()
       : webSpeech.isSupported;
 
