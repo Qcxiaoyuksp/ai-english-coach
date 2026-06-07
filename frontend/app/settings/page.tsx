@@ -102,6 +102,13 @@ const VOICE_MODES: {
   },
 ];
 
+const XIAOMI_TTS_VOICES: { id: string; label: string }[] = [
+  { id: 'Chloe', label: 'Chloe（英文女声）' },
+  { id: 'Mia', label: 'Mia（英文女声）' },
+  { id: 'Milo', label: 'Milo（英文男声）' },
+  { id: 'Dean', label: 'Dean（英文男声）' },
+];
+
 const DEFAULT_CONFIG: ApiConfig = {
   provider: 'free',
   apiKey: '',
@@ -109,6 +116,8 @@ const DEFAULT_CONFIG: ApiConfig = {
   model: '',
   voiceMode: 'free',
   ttsRate: 1.0,
+  ttsSource: 'browser',
+  ttsApiVoice: 'Chloe',
 };
 
 function loadInitialConfig(): ApiConfig {
@@ -153,6 +162,11 @@ export default function SettingsPage() {
   >('idle');
   const [testMessage, setTestMessage] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showTtsKey, setShowTtsKey] = useState(false);
+  const [ttsPreview, setTtsPreview] = useState<'idle' | 'loading' | 'error'>(
+    'idle',
+  );
+  const [ttsPreviewMsg, setTtsPreviewMsg] = useState('');
   const [saved, setSaved] = useState(false);
   // Model list fetched via the server-side /api/models proxy.
   const [models, setModels] = useState<string[]>([]);
@@ -311,6 +325,46 @@ export default function SettingsPage() {
     } catch {
       setTestStatus('error');
       setTestMessage('连接失败：网络错误');
+    }
+  };
+
+  // Preview the API TTS voice by synthesizing a short sample and playing it.
+  const previewTts = async () => {
+    setTtsPreview('loading');
+    setTtsPreviewMsg('正在合成试听...');
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: "Hi! I'm your English speaking coach. Let's practice together.",
+          voice: config.ttsApiVoice,
+          apiKey: config.ttsApiKey,
+          baseUrl: config.ttsApiBaseUrl,
+          model: config.ttsApiModel,
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setTtsPreview('error');
+        setTtsPreviewMsg(
+          data.error === 'TTS_API_UNAVAILABLE'
+            ? '未配置 TTS API Key（服务端未内置，且未填写自己的 Key）'
+            : data.error || `试听失败 (${response.status})`,
+        );
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.playbackRate = config.ttsRate || 1.0;
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+      setTtsPreview('idle');
+      setTtsPreviewMsg('试听播放中…');
+    } catch {
+      setTtsPreview('error');
+      setTtsPreviewMsg('试听失败：网络错误');
     }
   };
 
@@ -540,6 +594,140 @@ export default function SettingsPage() {
         {/* Voice Settings */}
         <div className="settings-section">
           <h2 className="settings-section-title">🔊 语音设置</h2>
+
+          {/* TTS Source */}
+          <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
+            <label className="input-label">AI 发音引擎</label>
+            <div className="provider-presets">
+              <button
+                className={`provider-preset ${(config.ttsSource ?? 'browser') === 'browser' ? 'active' : ''}`}
+                onClick={() => updateConfig({ ttsSource: 'browser' })}
+              >
+                🌐 浏览器语音（免费）
+              </button>
+              <button
+                className={`provider-preset ${config.ttsSource === 'api' ? 'active' : ''}`}
+                onClick={() => updateConfig({ ttsSource: 'api' })}
+              >
+                ✨ 小米 TTS（更自然）
+              </button>
+            </div>
+            <p
+              style={{
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+                marginTop: 'var(--space-2)',
+              }}
+            >
+              {config.ttsSource === 'api'
+                ? '使用小米 MiMo 云端 TTS 合成更自然的语音；默认走服务端内置 Key，失败时自动回退浏览器语音。'
+                : '使用浏览器内置语音合成，零配置、无需联网合成。'}
+            </p>
+          </div>
+
+          {/* API TTS options (only when 小米 TTS selected) */}
+          {config.ttsSource === 'api' && (
+            <div className="settings-grid" style={{ marginBottom: 'var(--space-5)' }}>
+              {/* Voice */}
+              <div className="input-group">
+                <label className="input-label">音色</label>
+                <select
+                  className="input"
+                  value={config.ttsApiVoice || 'Chloe'}
+                  onChange={(e) => updateConfig({ ttsApiVoice: e.target.value })}
+                >
+                  {XIAOMI_TTS_VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Preview */}
+              <div className="input-group">
+                <label className="input-label">试听</label>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  <button
+                    className="btn btn-secondary"
+                    onClick={previewTts}
+                    disabled={ttsPreview === 'loading'}
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    {ttsPreview === 'loading' ? '合成中...' : '🔈 试听音色'}
+                  </button>
+                  {ttsPreviewMsg && (
+                    <span
+                      style={{
+                        fontSize: 'var(--text-xs)',
+                        color:
+                          ttsPreview === 'error'
+                            ? 'var(--color-accent-rose)'
+                            : 'var(--color-text-muted)',
+                      }}
+                    >
+                      {ttsPreviewMsg}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Optional: user-supplied Xiaomi API */}
+              <div className="input-group settings-full-width">
+                <label className="input-label">
+                  自定义 TTS API（可选，留空则用内置）
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    className="input"
+                    type={showTtsKey ? 'text' : 'password'}
+                    value={config.ttsApiKey || ''}
+                    onChange={(e) => updateConfig({ ttsApiKey: e.target.value })}
+                    placeholder="你的小米 TTS API Key（留空使用内置）"
+                    style={{ paddingRight: '3rem' }}
+                  />
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowTtsKey(!showTtsKey)}
+                    style={{
+                      position: 'absolute',
+                      right: '4px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                    }}
+                    aria-label={showTtsKey ? '隐藏' : '显示'}
+                  >
+                    {showTtsKey ? '🙈' : '👁️'}
+                  </button>
+                </div>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Base URL（可选）</label>
+                <input
+                  className="input"
+                  value={config.ttsApiBaseUrl || ''}
+                  onChange={(e) => updateConfig({ ttsApiBaseUrl: e.target.value })}
+                  placeholder="https://api.xiaomimimo.com/v1"
+                />
+              </div>
+              <div className="input-group">
+                <label className="input-label">模型（可选）</label>
+                <input
+                  className="input"
+                  value={config.ttsApiModel || ''}
+                  onChange={(e) => updateConfig({ ttsApiModel: e.target.value })}
+                  placeholder="mimo-v2.5-tts"
+                />
+              </div>
+            </div>
+          )}
+
           <div className="settings-grid">
             <div className="input-group">
               <label className="input-label">语速 ({config.ttsRate?.toFixed(1)}x)</label>

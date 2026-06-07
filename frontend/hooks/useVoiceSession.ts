@@ -18,6 +18,7 @@ import {
   ChatMessage,
   Correction,
   Session,
+  TTSOptions,
 } from '@/types';
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
 import { generateFreeReply } from '@/lib/free-coach';
@@ -54,6 +55,26 @@ function loadApiConfig(): ApiConfig {
     if (saved) return JSON.parse(saved);
   } catch { /* ignore */ }
   return { provider: 'free', voiceMode: 'free' };
+}
+
+/** Assemble TTS options from the current config. When the user picks the cloud
+ *  TTS, the engine is 'api' (with optional own-key overrides); otherwise the
+ *  free browser SpeechSynthesis is used. */
+function buildTTSOptions(config: ApiConfig): TTSOptions {
+  const rate = config.ttsRate ?? 1.0;
+  if (config.ttsSource === 'api') {
+    return {
+      rate,
+      source: 'api',
+      apiVoice: config.ttsApiVoice,
+      apiConfig: {
+        apiKey: config.ttsApiKey,
+        baseUrl: config.ttsApiBaseUrl,
+        model: config.ttsApiModel,
+      },
+    };
+  }
+  return { rate, source: 'browser' };
 }
 
 export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
@@ -252,8 +273,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
         // Speak the AI response
         setSessionState('speaking');
-        const ttsRate = config.ttsRate ?? 1.0;
-        await webSpeech.speak(aiResponse, { rate: ttsRate });
+        await webSpeech.speak(aiResponse, buildTTSOptions(config));
 
         setSessionState('idle');
       } catch (error) {
@@ -299,8 +319,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
     // Speak the starter message
     setSessionState('speaking');
-    const ttsRate = configRef.current.ttsRate ?? 1.0;
-    await webSpeech.speak(scenario.starterMessage, { rate: ttsRate });
+    await webSpeech.speak(scenario.starterMessage, buildTTSOptions(configRef.current));
     setSessionState('idle');
   }, [scenario, webSpeech]);
 
