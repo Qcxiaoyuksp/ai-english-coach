@@ -169,51 +169,76 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
       try {
         const config = configRef.current;
-        let aiResponse: string;
+        // Free mode is now powered by a server-side built-in LLM (key stays on
+        // the server). Standard mode uses the user's configured key. Either way
+        // we enable the correction tool. If the LLM is unavailable we fall back
+        // to local scripted replies so the session never breaks.
+        const useServerKey = config.voiceMode === 'free';
+        const canUseLLM = useServerKey || !!config.apiKey;
 
-        if (config.voiceMode === 'free' || !config.apiKey) {
-          // Free mode: generate a context-aware reply locally (no API key).
-          await new Promise((r) => setTimeout(r, 700));
+        let aiResponse = '';
+        let llmHandled = false;
+
+        if (canUseLLM) {
+          try {
+            const chatMessages = buildChatMessages(
+              messagesRef.current,
+              userMsg,
+              scenarioRef.current,
+            );
+            const result = await callChatAPI(
+              config,
+              chatMessages,
+              [CORRECTION_TOOL],
+              useServerKey,
+            );
+            aiResponse = result.content;
+
+            // Handle corrections from tool calls
+            if (result.toolCalls) {
+              for (const tc of result.toolCalls) {
+                if (tc.name === 'provide_correction') {
+                  const correction: Correction = {
+                    id: generateId(),
+                    errorType: tc.arguments.error_type as Correction['errorType'],
+                    original: tc.arguments.original as string,
+                    corrected: tc.arguments.corrected as string,
+                    explanation: tc.arguments.explanation as string,
+                    severity: 'major',
+                  };
+                  setCorrections((prev) => [...prev, correction]);
+                }
+              }
+            }
+
+            // Fallback: some models return ONLY a tool call with empty content.
+            // Make one more call without tools so the conversation still flows.
+            if (!aiResponse.trim() && result.toolCalls && result.toolCalls.length > 0) {
+              const followUp = await callChatAPI(config, chatMessages, undefined, useServerKey);
+              aiResponse = followUp.content;
+            }
+
+            // Last-resort safety so TTS always has something to say.
+            if (!aiResponse.trim()) {
+              aiResponse = 'Got it. Please, go on.';
+            }
+            llmHandled = true;
+          } catch (err) {
+            if (!useServerKey) throw err; // Standard mode: surface the error.
+            // Free mode: built-in LLM unavailable (e.g. env not set) → fall back.
+            console.warn('[useVoiceSession] Free-mode LLM unavailable, using local replies:', err);
+          }
+        }
+
+        if (!llmHandled) {
+          // Local scripted fallback (no key, or free-mode LLM failure).
+          await new Promise((r) => setTimeout(r, 500));
           aiResponse = generateFreeReply({
             scenario: scenarioRef.current,
             userText: text,
             turnIndex: freeResponseIdx.current,
           });
           freeResponseIdx.current++;
-        } else {
-          // Standard mode: call LLM API with the correction tool enabled
-          const chatMessages = buildChatMessages(messagesRef.current, userMsg, scenarioRef.current);
-          const result = await callChatAPI(config, chatMessages, [CORRECTION_TOOL]);
-          aiResponse = result.content;
-
-          // Handle corrections from tool calls
-          if (result.toolCalls) {
-            for (const tc of result.toolCalls) {
-              if (tc.name === 'provide_correction') {
-                const correction: Correction = {
-                  id: generateId(),
-                  errorType: tc.arguments.error_type as Correction['errorType'],
-                  original: tc.arguments.original as string,
-                  corrected: tc.arguments.corrected as string,
-                  explanation: tc.arguments.explanation as string,
-                  severity: 'major',
-                };
-                setCorrections((prev) => [...prev, correction]);
-              }
-            }
-          }
-
-          // Fallback: some models return ONLY a tool call with empty content.
-          // Make one more call without tools so the conversation still flows.
-          if (!aiResponse.trim() && result.toolCalls && result.toolCalls.length > 0) {
-            const followUp = await callChatAPI(config, chatMessages);
-            aiResponse = followUp.content;
-          }
-
-          // Last-resort safety so TTS always has something to say.
-          if (!aiResponse.trim()) {
-            aiResponse = 'Got it. Please, go on.';
-          }
         }
 
         // Add AI message
@@ -398,6 +423,7 @@ async function callChatAPI(
   config: ApiConfig,
   messages: ChatMessage[],
   tools?: unknown[],
+  useServerKey?: boolean,
 ): Promise<{ content: string; toolCalls?: { name: string; arguments: Record<string, unknown> }[] }> {
   const response = await fetch('/api/chat', {
     method: 'POST',
@@ -408,6 +434,7 @@ async function callChatAPI(
       maxTokens: 512,
       temperature: 0.8,
       ...(tools && tools.length > 0 ? { tools } : {}),
+      ...(useServerKey ? { useServerKey: true } : {}),
     }),
   });
 
