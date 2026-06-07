@@ -1231,11 +1231,13 @@ ul, ol {
 /* Standalone ▾ button to the right of the model input. Fixed-size so it never
    resizes the input. */
 .model-select-toggle {
-  align-self: stretch;
+  align-self: center;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   background: var(--color-bg-glass);
   border: var(--border-default);
