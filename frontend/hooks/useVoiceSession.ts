@@ -20,19 +20,8 @@ import {
   Session,
 } from '@/types';
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
+import { generateFreeReply } from '@/lib/free-coach';
 import { saveSession, saveDraft, getDraft, clearDraft } from '@/lib/storage';
-
-// ─── Free-mode built-in responses ────────────────────────────
-const FREE_RESPONSES = [
-  "That's a great point! Could you tell me more about that?",
-  "I see what you mean. How would you handle that situation differently?",
-  "Interesting! Let me ask you another question about this topic.",
-  "That's a good answer. Let's move on to the next topic.",
-  "Could you elaborate on that a bit more?",
-  "Very well said! Now, let me ask you something else.",
-  "I appreciate your response. What else can you share?",
-  "Good thinking! Here's a follow-up question for you.",
-];
 
 export interface UseVoiceSessionReturn {
   startSession: () => void;
@@ -97,7 +86,9 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const configRef = useRef<ApiConfig>(loadApiConfig());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const freeResponseIdx = useRef(
-    draft ? draft.messages.filter((m) => m.role === 'assistant').length : 0
+    draft
+      ? Math.max(0, draft.messages.filter((m) => m.role === 'assistant').length - 1)
+      : 0
   );
   const isProcessingRef = useRef(false);
   const messagesRef = useRef(messages);
@@ -181,9 +172,13 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
         let aiResponse: string;
 
         if (config.voiceMode === 'free' || !config.apiKey) {
-          // Free mode: use simple built-in responses
-          await new Promise((r) => setTimeout(r, 800));
-          aiResponse = FREE_RESPONSES[freeResponseIdx.current % FREE_RESPONSES.length];
+          // Free mode: generate a context-aware reply locally (no API key).
+          await new Promise((r) => setTimeout(r, 700));
+          aiResponse = generateFreeReply({
+            scenario: scenarioRef.current,
+            userText: text,
+            turnIndex: freeResponseIdx.current,
+          });
           freeResponseIdx.current++;
         } else {
           // Standard mode: call LLM API with the correction tool enabled
