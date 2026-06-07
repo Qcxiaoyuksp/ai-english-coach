@@ -81,6 +81,7 @@ function PracticeContent({
   const session = useVoiceSession(scenario);
   const router = useRouter();
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [ending, setEnding] = useState(false);
   const diffInfo = DIFFICULTY_LABELS[scenario.difficulty];
   const modeLabel = useMemo(() => getVoiceModeLabel(), []);
 
@@ -90,6 +91,9 @@ function PracticeContent({
 
   const confirmEndPractice = useCallback(() => {
     setShowEndConfirm(false);
+    // Switch to a transient "ending" view so the start screen doesn't flash
+    // between deactivating the session and the report route loading.
+    setEnding(true);
     const sessionId = session.endSession();
     if (sessionId) {
       router.push(`/report/${sessionId}`);
@@ -144,7 +148,15 @@ function PracticeContent({
 
       {/* Main Content */}
       <div className="practice-content container">
-        {!session.isActive ? (
+        {ending ? (
+          /* Transient ending state — avoids flashing the start screen while
+             the report route loads. */
+          <div className="practice-start animate-fade-in-up">
+            <div className="practice-start-icon">📊</div>
+            <h2 className="practice-start-title">正在生成评估报告…</h2>
+            <p className="practice-start-desc">请稍候，马上为你展示本次练习的表现。</p>
+          </div>
+        ) : !session.isActive ? (
           /* Start Screen */
           <div className="practice-start animate-fade-in-up">
             <div className="practice-start-icon">{scenario.icon}</div>

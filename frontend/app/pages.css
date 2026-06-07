@@ -53,6 +53,7 @@
   border-radius: var(--radius-full);
   border: 2px solid rgba(59, 130, 246, 0.3);
   animation: ripple 2s ease-out infinite;
+  pointer-events: none;
 }
 .practice-ai-ring.ring-2 { animation-delay: 0.4s; }
 .practice-ai-ring.ring-3 { animation-delay: 0.8s; }
@@ -97,6 +98,7 @@
   border-radius: var(--radius-full);
   border: 2px solid var(--color-accent-rose);
   animation: ripple 1.5s ease-out infinite;
+  pointer-events: none;
 }
 
 /* Interim */
