@@ -42,7 +42,11 @@ export class SpeechManager {
     // Initialize STT
     this.stt = new WebSpeechSTT({
       lang: 'en-US',
-      continuous: false,   // One utterance at a time for conversation flow
+      // Continuous recording: keep listening across natural pauses and
+      // accumulate the full utterance. Submission is driven explicitly by
+      // the user tapping the mic again to stop (see useVoiceSession), not by
+      // the recognizer auto-finalizing on a pause.
+      continuous: true,
       interimResults: true,
     });
 

@@ -29,7 +29,7 @@ interface VoiceChatProps {
 
 const STATUS_LABELS: Record<VoiceSessionState, string> = {
   idle: '准备就绪 — 点击麦克风开始说话',
-  listening: '正在聆听...',
+  listening: '正在聆听 — 说完后再点一次结束',
   processing: 'AI 思考中...',
   speaking: 'AI 说话中...',
   error: '出现错误，请重试',
