@@ -39,27 +39,29 @@
 
 ## 🧱 技术架构
 
-纯前端单体应用，基于 **Next.js 15 App Router**。语音链路三段解耦，每一段都可在「浏览器免费」与「API 高质量」之间切换：
+纯前端单体应用，基于 **Next.js 15 App Router**。语音链路三段解耦（ASR 识别 / LLM 对话 / TTS 发音），引擎随模式切换，并通过服务端代理保护密钥：
 
 ```
    ASR（语音转文字）          LLM（对话生成）            TTS（文字转语音）
  ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
- │ Web Speech(免费) │     │  Provider 层      │     │ SpeechSynthesis │
- │ （浏览器内置）    │ →   │ OpenAI/Gemini/   │ →   │  （浏览器内置）  │
- │                 │     │ DeepSeek/Groq... │     │                 │
+ │ Web Speech(浏览器)│     │  Provider 层      │     │ 浏览器 / 小米    │
+ │  或 云端 ASR     │ →   │ 内置智谱 / 多家   │ →   │  MiMo 云端 TTS   │
+ │ (硅基 SenseVoice)│     │ 自配 LLM          │     │                 │
  └─────────────────┘     └──────────────────┘     └─────────────────┘
                                   │
-                       服务端代理（不暴露 Key）
-                    /api/chat        /api/analyze
+                 服务端代理（密钥仅在服务端，不暴露前端）
+          /api/chat  /api/analyze  /api/asr  /api/tts  /api/models
 ```
 
 **三种模式**
 
-| 模式 | ASR | LLM | TTS | 需要 Key |
+| 模式 | ASR 识别 | LLM 对话 | TTS 发音 | 用户需配置 |
 | --- | --- | --- | --- | --- |
-| 🟢 免费 | Web Speech | 内置话术 / 本地评测 | SpeechSynthesis | ❌ |
-| 🟡 标准 | Web Speech | 用户配置的 LLM | SpeechSynthesis | ✅ LLM Key |
-| 🔵 高级 | Web Speech | 用户配置的 LLM | SpeechSynthesis | ✅ |
+| 🟢 免费 | 浏览器 Web Speech | 内置智谱（服务端）/ 本地话术兜底 | 浏览器 SpeechSynthesis | 无（零配置） |
+| 🟡 标准 | 浏览器 Web Speech | 内置智谱 **或** 自配 LLM | 内置小米 MiMo（免费，失败回退浏览器） | 可选配 LLM |
+| 🔵 高级 | 内置硅基（默认）**或** 自填 ASR API | 内置智谱 **或** 自配 LLM | 内置小米（默认）**或** 自填 TTS API | 可选 |
+
+> 内置 LLM（智谱）、TTS（小米 MiMo）、ASR（硅基流动）的密钥均通过**服务端环境变量**配置，绝不下发到浏览器。用户也可在设置中填入自己的各家 API（标准/高级模式），配置自动持久保存。
 
 **目录结构**
 
@@ -141,7 +143,7 @@ npm run lint    # 单独执行 ESLint
 
 > **想免费体验真实对话？** 推荐到 [Google AI Studio](https://aistudio.google.com/) 免费申请 Gemini API Key，在设置页选择 Google Gemini 填入即可。
 
-**关于 API Key 安全**：所有对大模型的请求都经由本应用的服务端代理（`/api/chat`、`/api/analyze`）转发，Key 由用户在前端填写并随请求传递，不写入任何服务端环境变量，也不上传到第三方。
+**关于 API Key 安全**：所有对第三方服务的请求都经由本应用的服务端代理（`/api/chat`、`/api/analyze`、`/api/asr`、`/api/tts`、`/api/models`）转发。内置能力（智谱 LLM、小米 TTS、硅基 ASR）的密钥仅通过**服务端环境变量**配置，绝不下发浏览器；用户自配的 Key 保存在本地浏览器（localStorage）并随请求经服务端代理转发，不写入仓库、不上传第三方。
 
 ---
 

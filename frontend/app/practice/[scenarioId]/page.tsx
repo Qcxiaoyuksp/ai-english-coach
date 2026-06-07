@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { DIFFICULTY_LABELS } from '@/lib/scenarios';
 import { Scenario } from '@/types';
 import { resolveScenario } from '@/lib/storage';
+import { loadApiConfig, voiceModeLabel } from '@/lib/config';
 import { useIsClient } from '@/hooks/useIsClient';
 import { useVoiceSession } from '@/hooks/useVoiceSession';
 import VoiceChat from '@/components/VoiceChat';
@@ -28,17 +29,7 @@ function formatTime(seconds: number): string {
 
 function getVoiceModeLabel(): string {
   if (typeof window === 'undefined') return '免费模式';
-  try {
-    const config = localStorage.getItem('api-config');
-    if (config) {
-      const parsed = JSON.parse(config);
-      // The selected voiceMode is the source of truth — not the mere presence
-      // of a saved apiKey (which may linger from a previous standard-mode setup).
-      if (parsed.voiceMode === 'realtime') return '高级模式';
-      if (parsed.voiceMode === 'standard') return '标准模式';
-    }
-  } catch { /* ignore */ }
-  return '免费模式';
+  return voiceModeLabel(loadApiConfig().voiceMode);
 }
 
 export default function PracticePage({

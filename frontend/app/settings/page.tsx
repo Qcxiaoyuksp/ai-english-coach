@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ApiConfig, ProviderType, VoiceMode } from '@/types';
 import { useIsClient } from '@/hooks/useIsClient';
+import { DEFAULT_API_CONFIG, normalizeConfig } from '@/lib/config';
 
 const PROVIDER_PRESETS: {
   id: ProviderType;
@@ -16,7 +17,7 @@ const PROVIDER_PRESETS: {
     label: 'OpenAI',
     defaultBaseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-4o-mini',
-    description: '支持 GPT-4o、Realtime API',
+    description: '支持 GPT-4o 系列',
   },
   {
     id: 'gemini',
@@ -92,13 +93,13 @@ const VOICE_MODES: {
     mode: 'standard',
     icon: '🟡',
     name: '标准模式',
-    desc: '浏览器语音 + LLM 对话',
+    desc: '浏览器识别 + 内置/自配 LLM + 内置小米发音',
   },
   {
-    mode: 'realtime',
+    mode: 'advanced',
     icon: '🔵',
     name: '高级模式',
-    desc: 'OpenAI Realtime API',
+    desc: '云端 ASR + 内置/自配 LLM + 云端 TTS（可自填各家 API）',
   },
 ];
 
@@ -114,30 +115,15 @@ const ASR_MODELS: { id: string; label: string }[] = [
   { id: 'TeleAI/TeleSpeechASR', label: 'TeleSpeechASR（偏中文）' },
 ];
 
-const DEFAULT_CONFIG: ApiConfig = {
-  provider: 'free',
-  apiKey: '',
-  baseUrl: '',
-  model: '',
-  voiceMode: 'free',
-  ttsRate: 1.0,
-  ttsSource: 'browser',
-  ttsApiVoice: 'Chloe',
-  asrSource: 'browser',
-  asrApiModel: 'FunAudioLLM/SenseVoiceSmall',
-};
-
 function loadInitialConfig(): ApiConfig {
-  if (typeof window === 'undefined') return DEFAULT_CONFIG;
+  if (typeof window === 'undefined') return { ...DEFAULT_API_CONFIG };
   try {
     const savedConfig = localStorage.getItem('api-config');
-    if (savedConfig) {
-      return { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) };
-    }
+    if (savedConfig) return normalizeConfig(JSON.parse(savedConfig));
   } catch {
     // Ignore
   }
-  return DEFAULT_CONFIG;
+  return { ...DEFAULT_API_CONFIG };
 }
 
 // Per-provider memory of { apiKey, baseUrl, model } so switching providers
@@ -185,10 +171,7 @@ export default function SettingsPage() {
   const [showModelList, setShowModelList] = useState(false);
   const modelWrapRef = useRef<HTMLDivElement>(null);
 
-  // Close the model dropdown when clicking anywhere outside of it. Uses a
-  // document listener (rather than a fixed overlay) because ancestor elements
-  // use backdrop-filter, which would confine a position:fixed overlay to that
-  // ancestor's box instead of the full viewport.
+  // Close the model dropdown when clicking anywhere outside of it.
   useEffect(() => {
     if (!showModelList) return;
     const handlePointerDown = (e: MouseEvent) => {
@@ -202,9 +185,8 @@ export default function SettingsPage() {
 
   // Derive config: default during SSR/first render, saved value once on client,
   // then the user's latest edits. Avoids hydration mismatch and setState-in-effect.
-  const config = configOverride ?? (isClient ? loadInitialConfig() : DEFAULT_CONFIG);
+  const config = configOverride ?? (isClient ? loadInitialConfig() : DEFAULT_API_CONFIG);
 
-  // Auto-save config
   const saveConfig = (newConfig: ApiConfig) => {
     setConfigOverride(newConfig);
     localStorage.setItem('api-config', JSON.stringify(newConfig));
@@ -215,8 +197,6 @@ export default function SettingsPage() {
   const updateConfig = (partial: Partial<ApiConfig>) => {
     const newConfig = { ...config, ...partial };
     saveConfig(newConfig);
-    // A previous "connection successful" result is stale once the provider or
-    // any credential changes — reset it.
     if (
       'provider' in partial ||
       'apiKey' in partial ||
@@ -226,8 +206,6 @@ export default function SettingsPage() {
       setTestStatus('idle');
       setTestMessage('');
     }
-    // The fetched model list is tied to a specific provider/credentials —
-    // drop it when those change so a stale list isn't shown.
     if ('provider' in partial || 'apiKey' in partial || 'baseUrl' in partial) {
       setModels([]);
       setModelStatus('idle');
@@ -236,9 +214,8 @@ export default function SettingsPage() {
     }
   };
 
-  // Select provider preset
+  // Select provider preset (custom-LLM only).
   const selectProvider = (preset: (typeof PROVIDER_PRESETS)[number]) => {
-    // Remember the current provider's credentials before switching away.
     const profiles = loadProfiles();
     profiles[config.provider] = {
       apiKey: config.apiKey,
@@ -247,23 +224,16 @@ export default function SettingsPage() {
     };
     saveProfiles(profiles);
 
-    // Restore the target provider's saved values, falling back to its presets.
-    const saved = profiles[preset.id];
+    const savedProfile = profiles[preset.id];
     updateConfig({
       provider: preset.id,
-      apiKey: saved?.apiKey ?? '',
-      baseUrl: saved?.baseUrl ?? preset.defaultBaseUrl,
-      model: saved?.model ?? preset.defaultModel,
-      voiceMode:
-        preset.id === 'openai'
-          ? config.voiceMode
-          : config.voiceMode === 'realtime'
-            ? 'standard'
-            : config.voiceMode,
+      apiKey: savedProfile?.apiKey ?? '',
+      baseUrl: savedProfile?.baseUrl ?? preset.defaultBaseUrl,
+      model: savedProfile?.model ?? preset.defaultModel,
     });
   };
 
-  // Fetch the available model list from the provider via our server proxy.
+  // Fetch available models from the provider via our server proxy.
   const fetchModels = async () => {
     if (!config.apiKey) {
       setModelStatus('error');
@@ -298,17 +268,15 @@ export default function SettingsPage() {
     }
   };
 
-  // Test API connection
+  // Test the custom LLM connection.
   const testConnection = async () => {
     if (!config.apiKey) {
       setTestStatus('error');
       setTestMessage('请先输入 API Key');
       return;
     }
-
     setTestStatus('testing');
     setTestMessage('正在测试连接...');
-
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -321,7 +289,6 @@ export default function SettingsPage() {
           maxTokens: 20,
         }),
       });
-
       if (response.ok) {
         setTestStatus('success');
         setTestMessage('连接成功！API 可正常使用');
@@ -336,8 +303,10 @@ export default function SettingsPage() {
     }
   };
 
-  // Preview the API TTS voice by synthesizing a short sample and playing it.
+  // Preview the TTS voice. Uses the built-in key unless the user opted into a
+  // custom TTS API in advanced mode.
   const previewTts = async () => {
+    const useCustom = config.voiceMode === 'advanced' && !!config.ttsUseCustomApi;
     setTtsPreview('loading');
     setTtsPreviewMsg('正在合成试听...');
     try {
@@ -347,9 +316,9 @@ export default function SettingsPage() {
         body: JSON.stringify({
           text: "Hi! I'm your English speaking coach. Let's practice together.",
           voice: config.ttsApiVoice,
-          apiKey: config.ttsApiKey,
-          baseUrl: config.ttsApiBaseUrl,
-          model: config.ttsApiModel,
+          apiKey: useCustom ? config.ttsApiKey : undefined,
+          baseUrl: useCustom ? config.ttsApiBaseUrl : undefined,
+          model: useCustom ? config.ttsApiModel : undefined,
         }),
       });
       if (!response.ok) {
@@ -377,6 +346,8 @@ export default function SettingsPage() {
   };
 
   const currentPreset = PROVIDER_PRESETS.find((p) => p.id === config.provider);
+  const isCustomLLM = config.llmSource === 'custom';
+  const isAdvanced = config.voiceMode === 'advanced';
 
   return (
     <div className="container">
@@ -391,22 +362,7 @@ export default function SettingsPage() {
               <div
                 key={vm.mode}
                 className={`voice-mode-option ${config.voiceMode === vm.mode ? 'selected' : ''}`}
-                onClick={() => {
-                  if (vm.mode === 'realtime' && config.provider !== 'openai') {
-                    // Switch to OpenAI if selecting realtime
-                    const openai = PROVIDER_PRESETS.find(
-                      (p) => p.id === 'openai',
-                    )!;
-                    updateConfig({
-                      voiceMode: vm.mode,
-                      provider: 'openai',
-                      baseUrl: openai.defaultBaseUrl,
-                      model: openai.defaultModel,
-                    });
-                  } else {
-                    updateConfig({ voiceMode: vm.mode });
-                  }
-                }}
+                onClick={() => updateConfig({ voiceMode: vm.mode })}
                 role="button"
                 tabIndex={0}
               >
@@ -418,26 +374,29 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* API Provider Configuration */}
+        {/* LLM Configuration — standard & advanced */}
         {config.voiceMode !== 'free' && (
           <div className="settings-section">
-            <h2 className="settings-section-title">🔌 API 配置</h2>
+            <h2 className="settings-section-title">🤖 对话模型 (LLM)</h2>
 
-            {/* Provider Presets */}
+            {/* LLM source */}
             <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
-              <label className="input-label">选择 AI 提供商</label>
+              <label className="input-label">对话模型来源</label>
               <div className="provider-presets">
-                {PROVIDER_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    className={`provider-preset ${config.provider === preset.id ? 'active' : ''}`}
-                    onClick={() => selectProvider(preset)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+                <button
+                  className={`provider-preset ${!isCustomLLM ? 'active' : ''}`}
+                  onClick={() => updateConfig({ llmSource: 'builtin' })}
+                >
+                  🆓 内置智谱（免费）
+                </button>
+                <button
+                  className={`provider-preset ${isCustomLLM ? 'active' : ''}`}
+                  onClick={() => updateConfig({ llmSource: 'custom' })}
+                >
+                  🔧 自己配置
+                </button>
               </div>
-              {currentPreset && (
+              {!isCustomLLM && (
                 <p
                   style={{
                     fontSize: 'var(--text-xs)',
@@ -445,393 +404,451 @@ export default function SettingsPage() {
                     marginTop: 'var(--space-2)',
                   }}
                 >
-                  {currentPreset.description}
+                  使用服务端内置的智谱 GLM 对话，无需配置 Key。
                 </p>
               )}
             </div>
 
-            <div className="settings-grid">
-              {/* API Key */}
-              <div className="input-group settings-full-width">
-                <label className="input-label">API Key</label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    className="input"
-                    type={showApiKey ? 'text' : 'password'}
-                    value={config.apiKey || ''}
-                    onChange={(e) => updateConfig({ apiKey: e.target.value })}
-                    placeholder="sk-... 或 AI... 填入你的 API Key"
-                    style={{ paddingRight: '3rem' }}
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    style={{
-                      position: 'absolute',
-                      right: '4px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                    }}
-                    aria-label={showApiKey ? '隐藏' : '显示'}
-                  >
-                    {showApiKey ? '🙈' : '👁️'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Base URL */}
-              <div className="input-group">
-                <label className="input-label">API Base URL</label>
-                <input
-                  className="input"
-                  value={config.baseUrl || ''}
-                  onChange={(e) => updateConfig({ baseUrl: e.target.value })}
-                  placeholder="https://api.example.com/v1"
-                />
-              </div>
-
-              {/* Model */}
-              <div className="input-group" style={{ position: 'relative' }}>
-                <label className="input-label">模型名称</label>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 'var(--space-2)',
-                    alignItems: 'center',
-                  }}
-                >
-                  <input
-                    className="input"
-                    style={{ flex: 1 }}
-                    value={config.model || ''}
-                    onChange={(e) => updateConfig({ model: e.target.value })}
-                    placeholder={currentPreset?.defaultModel || 'gpt-4o-mini'}
-                  />
-                  {models.length > 0 && (
-                    <div className="model-select-wrap" ref={modelWrapRef}>
+            {isCustomLLM && (
+              <>
+                <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
+                  <label className="input-label">选择 AI 提供商</label>
+                  <div className="provider-presets">
+                    {PROVIDER_PRESETS.map((preset) => (
                       <button
-                        type="button"
-                        className="model-select-toggle"
-                        onClick={() => setShowModelList((v) => !v)}
-                        aria-label="从列表选择模型"
-                        aria-expanded={showModelList}
-                        title="从已获取的模型列表选择"
+                        key={preset.id}
+                        className={`provider-preset ${config.provider === preset.id ? 'active' : ''}`}
+                        onClick={() => selectProvider(preset)}
                       >
-                        ▾
+                        {preset.label}
                       </button>
-                      {showModelList && (
-                        <div className="model-dropdown" role="listbox">
-                          {models.map((m) => (
-                            <button
-                              type="button"
-                              key={m}
-                              className={`model-dropdown-item ${config.model === m ? 'active' : ''}`}
-                              role="option"
-                              aria-selected={config.model === m}
-                              onClick={() => {
-                                updateConfig({ model: m });
-                                setShowModelList(false);
-                              }}
-                            >
-                              {m}
-                            </button>
-                          ))}
+                    ))}
+                  </div>
+                  {currentPreset && (
+                    <p
+                      style={{
+                        fontSize: 'var(--text-xs)',
+                        color: 'var(--color-text-muted)',
+                        marginTop: 'var(--space-2)',
+                      }}
+                    >
+                      {currentPreset.description}
+                    </p>
+                  )}
+                </div>
+
+                <div className="settings-grid">
+                  {/* API Key */}
+                  <div className="input-group settings-full-width">
+                    <label className="input-label">API Key</label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        className="input"
+                        type={showApiKey ? 'text' : 'password'}
+                        value={config.apiKey || ''}
+                        onChange={(e) => updateConfig({ apiKey: e.target.value })}
+                        placeholder="sk-... 或 AI... 填入你的 API Key"
+                        style={{ paddingRight: '3rem' }}
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        style={{
+                          position: 'absolute',
+                          right: '4px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                        }}
+                        aria-label={showApiKey ? '隐藏' : '显示'}
+                      >
+                        {showApiKey ? '🙈' : '👁️'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Base URL */}
+                  <div className="input-group">
+                    <label className="input-label">API Base URL</label>
+                    <input
+                      className="input"
+                      value={config.baseUrl || ''}
+                      onChange={(e) => updateConfig({ baseUrl: e.target.value })}
+                      placeholder="https://api.example.com/v1"
+                    />
+                  </div>
+
+                  {/* Model */}
+                  <div className="input-group" style={{ position: 'relative' }}>
+                    <label className="input-label">模型名称</label>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 'var(--space-2)',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <input
+                        className="input"
+                        style={{ flex: 1 }}
+                        value={config.model || ''}
+                        onChange={(e) => updateConfig({ model: e.target.value })}
+                        placeholder={currentPreset?.defaultModel || 'gpt-4o-mini'}
+                      />
+                      {models.length > 0 && (
+                        <div className="model-select-wrap" ref={modelWrapRef}>
+                          <button
+                            type="button"
+                            className="model-select-toggle"
+                            onClick={() => setShowModelList((v) => !v)}
+                            aria-label="从列表选择模型"
+                            aria-expanded={showModelList}
+                            title="从已获取的模型列表选择"
+                          >
+                            ▾
+                          </button>
+                          {showModelList && (
+                            <div className="model-dropdown" role="listbox">
+                              {models.map((m) => (
+                                <button
+                                  type="button"
+                                  key={m}
+                                  className={`model-dropdown-item ${config.model === m ? 'active' : ''}`}
+                                  role="option"
+                                  aria-selected={config.model === m}
+                                  onClick={() => {
+                                    updateConfig({ model: m });
+                                    setShowModelList(false);
+                                  }}
+                                >
+                                  {m}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={fetchModels}
+                        disabled={modelStatus === 'loading'}
+                        style={{ whiteSpace: 'nowrap', minWidth: '7rem' }}
+                      >
+                        {modelStatus === 'loading' ? '获取中...' : '获取模型列表'}
+                      </button>
+                    </div>
+                    {modelMessage && (
+                      <p
+                        className="model-status-msg"
+                        style={{
+                          color:
+                            modelStatus === 'error'
+                              ? 'var(--color-accent-rose)'
+                              : 'var(--color-text-muted)',
+                        }}
+                      >
+                        {modelMessage}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Test Connection */}
+                <div
+                  style={{
+                    marginTop: 'var(--space-5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-4)',
+                  }}
+                >
+                  <button className="btn btn-secondary" onClick={testConnection}>
+                    🔍 测试连接
+                  </button>
+                  {testStatus !== 'idle' && (
+                    <div className="test-connection">
+                      <span className={`test-dot ${testStatus}`} />
+                      <span
+                        style={{
+                          fontSize: 'var(--text-sm)',
+                          color:
+                            testStatus === 'success'
+                              ? 'var(--color-accent-emerald)'
+                              : testStatus === 'error'
+                                ? 'var(--color-accent-rose)'
+                                : 'var(--color-text-secondary)',
+                        }}
+                      >
+                        {testMessage}
+                      </span>
                     </div>
                   )}
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={fetchModels}
-                    disabled={modelStatus === 'loading'}
-                    style={{ whiteSpace: 'nowrap', minWidth: '7rem' }}
-                  >
-                    {modelStatus === 'loading' ? '获取中...' : '获取模型列表'}
-                  </button>
                 </div>
-                {modelMessage && (
-                  <p
-                    className="model-status-msg"
-                    style={{
-                      color:
-                        modelStatus === 'error'
-                          ? 'var(--color-accent-rose)'
-                          : 'var(--color-text-muted)',
-                    }}
-                  >
-                    {modelMessage}
-                  </p>
-                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Speech Recognition (ASR) — advanced only */}
+        {isAdvanced && (
+          <div className="settings-section">
+            <h2 className="settings-section-title">🎤 语音识别 (ASR)</h2>
+
+            <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
+              <label className="input-label">识别来源</label>
+              <div className="provider-presets">
+                <button
+                  className={`provider-preset ${!config.asrUseCustomApi ? 'active' : ''}`}
+                  onClick={() => updateConfig({ asrUseCustomApi: false })}
+                >
+                  ✨ 内置硅基（默认）
+                </button>
+                <button
+                  className={`provider-preset ${config.asrUseCustomApi ? 'active' : ''}`}
+                  onClick={() => updateConfig({ asrUseCustomApi: true })}
+                >
+                  🔧 自定义 ASR API
+                </button>
               </div>
+              <p
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-text-muted)',
+                  marginTop: 'var(--space-2)',
+                }}
+              >
+                录制整段音频后云端识别：更准、不会被停顿截断，Edge/Firefox 也可用。
+              </p>
             </div>
 
-            {/* Test Connection */}
-            <div
-              style={{
-                marginTop: 'var(--space-5)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-4)',
-              }}
-            >
-              <button className="btn btn-secondary" onClick={testConnection}>
-                🔍 测试连接
-              </button>
-              {testStatus !== 'idle' && (
-                <div className="test-connection">
-                  <span className={`test-dot ${testStatus}`} />
-                  <span
-                    style={{
-                      fontSize: 'var(--text-sm)',
-                      color:
-                        testStatus === 'success'
-                          ? 'var(--color-accent-emerald)'
-                          : testStatus === 'error'
-                            ? 'var(--color-accent-rose)'
-                            : 'var(--color-text-secondary)',
-                    }}
+            <div className="settings-grid">
+              {/* Model (built-in SiliconFlow) */}
+              {!config.asrUseCustomApi && (
+                <div className="input-group">
+                  <label className="input-label">识别模型</label>
+                  <select
+                    className="input"
+                    value={config.asrApiModel || 'FunAudioLLM/SenseVoiceSmall'}
+                    onChange={(e) => updateConfig({ asrApiModel: e.target.value })}
                   >
-                    {testMessage}
-                  </span>
+                    {ASR_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+              )}
+
+              {/* Custom ASR API */}
+              {config.asrUseCustomApi && (
+                <>
+                  <div className="input-group settings-full-width">
+                    <label className="input-label">ASR API Key</label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        className="input"
+                        type={showAsrKey ? 'text' : 'password'}
+                        value={config.asrApiKey || ''}
+                        onChange={(e) => updateConfig({ asrApiKey: e.target.value })}
+                        placeholder="你的 ASR 提供商 API Key"
+                        style={{ paddingRight: '3rem' }}
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setShowAsrKey(!showAsrKey)}
+                        style={{
+                          position: 'absolute',
+                          right: '4px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                        }}
+                        aria-label={showAsrKey ? '隐藏' : '显示'}
+                      >
+                        {showAsrKey ? '🙈' : '👁️'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Base URL</label>
+                    <input
+                      className="input"
+                      value={config.asrApiBaseUrl || ''}
+                      onChange={(e) => updateConfig({ asrApiBaseUrl: e.target.value })}
+                      placeholder="https://api.siliconflow.cn/v1"
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">识别模型</label>
+                    <input
+                      className="input"
+                      value={config.asrApiModel || ''}
+                      onChange={(e) => updateConfig({ asrApiModel: e.target.value })}
+                      placeholder="FunAudioLLM/SenseVoiceSmall"
+                    />
+                  </div>
+                </>
               )}
             </div>
           </div>
         )}
 
-        {/* Speech Recognition (ASR) Settings */}
+        {/* Text-to-Speech (TTS) — all modes */}
         <div className="settings-section">
-          <h2 className="settings-section-title">🎤 语音识别</h2>
+          <h2 className="settings-section-title">🔊 语音合成 (TTS)</h2>
 
-          {/* ASR Source */}
-          <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
-            <label className="input-label">语音识别引擎</label>
-            <div className="provider-presets">
-              <button
-                className={`provider-preset ${(config.asrSource ?? 'browser') === 'browser' ? 'active' : ''}`}
-                onClick={() => updateConfig({ asrSource: 'browser' })}
-              >
-                🌐 浏览器识别（免费）
-              </button>
-              <button
-                className={`provider-preset ${config.asrSource === 'api' ? 'active' : ''}`}
-                onClick={() => updateConfig({ asrSource: 'api' })}
-              >
-                ✨ 云端识别（更准）
-              </button>
-            </div>
+          {config.voiceMode === 'free' ? (
             <p
               style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-                marginTop: 'var(--space-2)',
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-text-secondary)',
+                marginBottom: 'var(--space-4)',
               }}
             >
-              {config.asrSource === 'api'
-                ? '录制整段音频后用硅基流动云端 ASR 识别：更准、不会被停顿截断，且在 Edge/Firefox 也可用。默认走服务端内置 Key。'
-                : '使用浏览器内置语音识别（Web Speech），零配置；建议用 Chrome。'}
+              免费模式使用浏览器内置语音合成（SpeechSynthesis）。
             </p>
-          </div>
-
-          {/* API ASR options (only when 云端识别 selected) */}
-          {config.asrSource === 'api' && (
-            <div className="settings-grid">
-              {/* Model */}
-              <div className="input-group">
-                <label className="input-label">识别模型</label>
-                <select
-                  className="input"
-                  value={config.asrApiModel || 'FunAudioLLM/SenseVoiceSmall'}
-                  onChange={(e) => updateConfig({ asrApiModel: e.target.value })}
-                >
-                  {ASR_MODELS.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Optional: user-supplied SiliconFlow API */}
-              <div className="input-group settings-full-width">
-                <label className="input-label">
-                  自定义 ASR API（可选，留空则用内置）
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    className="input"
-                    type={showAsrKey ? 'text' : 'password'}
-                    value={config.asrApiKey || ''}
-                    onChange={(e) => updateConfig({ asrApiKey: e.target.value })}
-                    placeholder="你的硅基流动 API Key（留空使用内置）"
-                    style={{ paddingRight: '3rem' }}
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setShowAsrKey(!showAsrKey)}
-                    style={{
-                      position: 'absolute',
-                      right: '4px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                    }}
-                    aria-label={showAsrKey ? '隐藏' : '显示'}
-                  >
-                    {showAsrKey ? '🙈' : '👁️'}
-                  </button>
+          ) : (
+            <>
+              {/* Advanced: built-in vs custom TTS API */}
+              {isAdvanced && (
+                <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
+                  <label className="input-label">发音来源</label>
+                  <div className="provider-presets">
+                    <button
+                      className={`provider-preset ${!config.ttsUseCustomApi ? 'active' : ''}`}
+                      onClick={() => updateConfig({ ttsUseCustomApi: false })}
+                    >
+                      ✨ 内置小米（默认）
+                    </button>
+                    <button
+                      className={`provider-preset ${config.ttsUseCustomApi ? 'active' : ''}`}
+                      onClick={() => updateConfig({ ttsUseCustomApi: true })}
+                    >
+                      🔧 自定义 TTS API
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className="input-group">
-                <label className="input-label">Base URL（可选）</label>
-                <input
-                  className="input"
-                  value={config.asrApiBaseUrl || ''}
-                  onChange={(e) => updateConfig({ asrApiBaseUrl: e.target.value })}
-                  placeholder="https://api.siliconflow.cn/v1"
-                />
-              </div>
-            </div>
-          )}
-        </div>
+              )}
 
-        {/* Voice Settings */}
-        <div className="settings-section">
-          <h2 className="settings-section-title">🔊 语音设置</h2>
-
-          {/* TTS Source */}
-          <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
-            <label className="input-label">AI 发音引擎</label>
-            <div className="provider-presets">
-              <button
-                className={`provider-preset ${(config.ttsSource ?? 'browser') === 'browser' ? 'active' : ''}`}
-                onClick={() => updateConfig({ ttsSource: 'browser' })}
-              >
-                🌐 浏览器语音（免费）
-              </button>
-              <button
-                className={`provider-preset ${config.ttsSource === 'api' ? 'active' : ''}`}
-                onClick={() => updateConfig({ ttsSource: 'api' })}
-              >
-                ✨ 小米 TTS（更自然）
-              </button>
-            </div>
-            <p
-              style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-                marginTop: 'var(--space-2)',
-              }}
-            >
-              {config.ttsSource === 'api'
-                ? '使用小米 MiMo 云端 TTS 合成更自然的语音；默认走服务端内置 Key，失败时自动回退浏览器语音。'
-                : '使用浏览器内置语音合成，零配置、无需联网合成。'}
-            </p>
-          </div>
-
-          {/* API TTS options (only when 小米 TTS selected) */}
-          {config.ttsSource === 'api' && (
-            <div className="settings-grid" style={{ marginBottom: 'var(--space-5)' }}>
-              {/* Voice */}
-              <div className="input-group">
-                <label className="input-label">音色</label>
-                <select
-                  className="input"
-                  value={config.ttsApiVoice || 'Chloe'}
-                  onChange={(e) => updateConfig({ ttsApiVoice: e.target.value })}
-                >
-                  {XIAOMI_TTS_VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Preview */}
-              <div className="input-group">
-                <label className="input-label">试听</label>
-                <div
+              {!isAdvanced && (
+                <p
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-3)',
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--color-text-muted)',
+                    marginBottom: 'var(--space-4)',
                   }}
                 >
-                  <button
-                    className="btn btn-secondary"
-                    onClick={previewTts}
-                    disabled={ttsPreview === 'loading'}
-                    style={{ whiteSpace: 'nowrap' }}
-                  >
-                    {ttsPreview === 'loading' ? '合成中...' : '🔈 试听音色'}
-                  </button>
-                  {ttsPreviewMsg && (
-                    <span
-                      style={{
-                        fontSize: 'var(--text-xs)',
-                        color:
-                          ttsPreview === 'error'
-                            ? 'var(--color-accent-rose)'
-                            : 'var(--color-text-muted)',
-                      }}
-                    >
-                      {ttsPreviewMsg}
-                    </span>
-                  )}
-                </div>
-              </div>
+                  使用内置小米 MiMo 云端语音合成（免费），失败时自动回退浏览器语音。
+                </p>
+              )}
 
-              {/* Optional: user-supplied Xiaomi API */}
-              <div className="input-group settings-full-width">
-                <label className="input-label">
-                  自定义 TTS API（可选，留空则用内置）
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    className="input"
-                    type={showTtsKey ? 'text' : 'password'}
-                    value={config.ttsApiKey || ''}
-                    onChange={(e) => updateConfig({ ttsApiKey: e.target.value })}
-                    placeholder="你的小米 TTS API Key（留空使用内置）"
-                    style={{ paddingRight: '3rem' }}
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setShowTtsKey(!showTtsKey)}
+              <div className="settings-grid">
+                {/* Custom TTS API (advanced) */}
+                {isAdvanced && config.ttsUseCustomApi && (
+                  <>
+                    <div className="input-group settings-full-width">
+                      <label className="input-label">TTS API Key</label>
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          className="input"
+                          type={showTtsKey ? 'text' : 'password'}
+                          value={config.ttsApiKey || ''}
+                          onChange={(e) => updateConfig({ ttsApiKey: e.target.value })}
+                          placeholder="你的 TTS 提供商 API Key"
+                          style={{ paddingRight: '3rem' }}
+                        />
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setShowTtsKey(!showTtsKey)}
+                          style={{
+                            position: 'absolute',
+                            right: '4px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                          }}
+                          aria-label={showTtsKey ? '隐藏' : '显示'}
+                        >
+                          {showTtsKey ? '🙈' : '👁️'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Base URL</label>
+                      <input
+                        className="input"
+                        value={config.ttsApiBaseUrl || ''}
+                        onChange={(e) => updateConfig({ ttsApiBaseUrl: e.target.value })}
+                        placeholder="https://api.xiaomimimo.com/v1"
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">模型</label>
+                      <input
+                        className="input"
+                        value={config.ttsApiModel || ''}
+                        onChange={(e) => updateConfig({ ttsApiModel: e.target.value })}
+                        placeholder="mimo-v2.5-tts"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Voice (Xiaomi presets) — shown for built-in 小米 */}
+                {!(isAdvanced && config.ttsUseCustomApi) && (
+                  <div className="input-group">
+                    <label className="input-label">音色</label>
+                    <select
+                      className="input"
+                      value={config.ttsApiVoice || 'Chloe'}
+                      onChange={(e) => updateConfig({ ttsApiVoice: e.target.value })}
+                    >
+                      {XIAOMI_TTS_VOICES.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Preview */}
+                <div className="input-group">
+                  <label className="input-label">试听</label>
+                  <div
                     style={{
-                      position: 'absolute',
-                      right: '4px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-3)',
                     }}
-                    aria-label={showTtsKey ? '隐藏' : '显示'}
                   >
-                    {showTtsKey ? '🙈' : '👁️'}
-                  </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={previewTts}
+                      disabled={ttsPreview === 'loading'}
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {ttsPreview === 'loading' ? '合成中...' : '🔈 试听音色'}
+                    </button>
+                    {ttsPreviewMsg && (
+                      <span
+                        style={{
+                          fontSize: 'var(--text-xs)',
+                          color:
+                            ttsPreview === 'error'
+                              ? 'var(--color-accent-rose)'
+                              : 'var(--color-text-muted)',
+                        }}
+                      >
+                        {ttsPreviewMsg}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div className="input-group">
-                <label className="input-label">Base URL（可选）</label>
-                <input
-                  className="input"
-                  value={config.ttsApiBaseUrl || ''}
-                  onChange={(e) => updateConfig({ ttsApiBaseUrl: e.target.value })}
-                  placeholder="https://api.xiaomimimo.com/v1"
-                />
-              </div>
-              <div className="input-group">
-                <label className="input-label">模型（可选）</label>
-                <input
-                  className="input"
-                  value={config.ttsApiModel || ''}
-                  onChange={(e) => updateConfig({ ttsApiModel: e.target.value })}
-                  placeholder="mimo-v2.5-tts"
-                />
-              </div>
-            </div>
+            </>
           )}
 
-          <div className="settings-grid">
+          {/* Rate (all modes) */}
+          <div className="settings-grid" style={{ marginTop: 'var(--space-4)' }}>
             <div className="input-group">
               <label className="input-label">语速 ({config.ttsRate?.toFixed(1)}x)</label>
               <input

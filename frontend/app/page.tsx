@@ -10,22 +10,23 @@ import {
   deleteCustomScenario,
 } from '@/lib/storage';
 import { useIsClient } from '@/hooks/useIsClient';
+import { loadApiConfig, voiceModeLabel } from '@/lib/config';
 import ScenarioCreator from '@/components/ScenarioCreator';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
-function getVoiceModeInfo(): { voiceMode: string; hasApiKey: boolean } {
-  if (typeof window === 'undefined') return { voiceMode: 'free', hasApiKey: false };
-  try {
-    const config = localStorage.getItem('api-config');
-    if (config) {
-      const parsed = JSON.parse(config);
-      return {
-        voiceMode: parsed.voiceMode || 'free',
-        hasApiKey: !!parsed.apiKey,
-      };
-    }
-  } catch { /* ignore */ }
-  return { voiceMode: 'free', hasApiKey: false };
+function getModeBadge(): { label: string; needsApiKey: boolean } {
+  if (typeof window === 'undefined') {
+    return { label: '免费模式 · 浏览器语音', needsApiKey: false };
+  }
+  const config = loadApiConfig();
+  // A custom-LLM choice that has no key configured yet.
+  const needsApiKey = config.voiceMode !== 'free' &&
+    config.llmSource === 'custom' && !config.apiKey;
+  const label =
+    config.voiceMode === 'free'
+      ? '免费模式 · 浏览器语音'
+      : `${voiceModeLabel(config.voiceMode)}${needsApiKey ? ' · 未配置 Key' : ''}`;
+  return { label, needsApiKey };
 }
 
 export default function HomePage() {
@@ -37,19 +38,9 @@ export default function HomePage() {
   // Browser-only values; default to empty/false during SSR + first render.
   const customScenarios =
     customOverride ?? (isClient ? listCustomScenarios() : []);
-  const { voiceMode, hasApiKey } = isClient
-    ? getVoiceModeInfo()
-    : { voiceMode: 'free', hasApiKey: false };
-  // A mode that relies on a user-supplied LLM key but has none configured.
-  const needsApiKey = voiceMode !== 'free' && !hasApiKey;
-  const modeBadgeLabel =
-    voiceMode === 'realtime'
-      ? '高级模式'
-      : voiceMode === 'standard'
-        ? hasApiKey
-          ? '标准模式 · 已配置 API'
-          : '标准模式 · 未配置 Key'
-        : '免费模式 · 浏览器语音';
+  const { label: modeBadgeLabel, needsApiKey } = isClient
+    ? getModeBadge()
+    : { label: '免费模式 · 浏览器语音', needsApiKey: false };
 
   const allScenarios = [...BUILT_IN_SCENARIOS, ...customScenarios];
 
