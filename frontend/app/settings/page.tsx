@@ -109,6 +109,11 @@ const XIAOMI_TTS_VOICES: { id: string; label: string }[] = [
   { id: 'Dean', label: 'Dean（英文男声）' },
 ];
 
+const ASR_MODELS: { id: string; label: string }[] = [
+  { id: 'FunAudioLLM/SenseVoiceSmall', label: 'SenseVoiceSmall（多语种，推荐英文）' },
+  { id: 'TeleAI/TeleSpeechASR', label: 'TeleSpeechASR（偏中文）' },
+];
+
 const DEFAULT_CONFIG: ApiConfig = {
   provider: 'free',
   apiKey: '',
@@ -118,6 +123,8 @@ const DEFAULT_CONFIG: ApiConfig = {
   ttsRate: 1.0,
   ttsSource: 'browser',
   ttsApiVoice: 'Chloe',
+  asrSource: 'browser',
+  asrApiModel: 'FunAudioLLM/SenseVoiceSmall',
 };
 
 function loadInitialConfig(): ApiConfig {
@@ -163,6 +170,7 @@ export default function SettingsPage() {
   const [testMessage, setTestMessage] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [showTtsKey, setShowTtsKey] = useState(false);
+  const [showAsrKey, setShowAsrKey] = useState(false);
   const [ttsPreview, setTtsPreview] = useState<'idle' | 'loading' | 'error'>(
     'idle',
   );
@@ -590,6 +598,101 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {/* Speech Recognition (ASR) Settings */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">🎤 语音识别</h2>
+
+          {/* ASR Source */}
+          <div className="input-group" style={{ marginBottom: 'var(--space-5)' }}>
+            <label className="input-label">语音识别引擎</label>
+            <div className="provider-presets">
+              <button
+                className={`provider-preset ${(config.asrSource ?? 'browser') === 'browser' ? 'active' : ''}`}
+                onClick={() => updateConfig({ asrSource: 'browser' })}
+              >
+                🌐 浏览器识别（免费）
+              </button>
+              <button
+                className={`provider-preset ${config.asrSource === 'api' ? 'active' : ''}`}
+                onClick={() => updateConfig({ asrSource: 'api' })}
+              >
+                ✨ 云端识别（更准）
+              </button>
+            </div>
+            <p
+              style={{
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+                marginTop: 'var(--space-2)',
+              }}
+            >
+              {config.asrSource === 'api'
+                ? '录制整段音频后用硅基流动云端 ASR 识别：更准、不会被停顿截断，且在 Edge/Firefox 也可用。默认走服务端内置 Key。'
+                : '使用浏览器内置语音识别（Web Speech），零配置；建议用 Chrome。'}
+            </p>
+          </div>
+
+          {/* API ASR options (only when 云端识别 selected) */}
+          {config.asrSource === 'api' && (
+            <div className="settings-grid">
+              {/* Model */}
+              <div className="input-group">
+                <label className="input-label">识别模型</label>
+                <select
+                  className="input"
+                  value={config.asrApiModel || 'FunAudioLLM/SenseVoiceSmall'}
+                  onChange={(e) => updateConfig({ asrApiModel: e.target.value })}
+                >
+                  {ASR_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Optional: user-supplied SiliconFlow API */}
+              <div className="input-group settings-full-width">
+                <label className="input-label">
+                  自定义 ASR API（可选，留空则用内置）
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    className="input"
+                    type={showAsrKey ? 'text' : 'password'}
+                    value={config.asrApiKey || ''}
+                    onChange={(e) => updateConfig({ asrApiKey: e.target.value })}
+                    placeholder="你的硅基流动 API Key（留空使用内置）"
+                    style={{ paddingRight: '3rem' }}
+                  />
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowAsrKey(!showAsrKey)}
+                    style={{
+                      position: 'absolute',
+                      right: '4px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                    }}
+                    aria-label={showAsrKey ? '隐藏' : '显示'}
+                  >
+                    {showAsrKey ? '🙈' : '👁️'}
+                  </button>
+                </div>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Base URL（可选）</label>
+                <input
+                  className="input"
+                  value={config.asrApiBaseUrl || ''}
+                  onChange={(e) => updateConfig({ asrApiBaseUrl: e.target.value })}
+                  placeholder="https://api.siliconflow.cn/v1"
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Voice Settings */}
         <div className="settings-section">

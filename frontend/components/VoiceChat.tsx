@@ -30,6 +30,7 @@ interface VoiceChatProps {
 const STATUS_LABELS: Record<VoiceSessionState, string> = {
   idle: '准备就绪 — 点击麦克风开始说话',
   listening: '正在聆听 — 说完后再点一次结束',
+  transcribing: '正在识别你的语音...',
   processing: 'AI 思考中...',
   speaking: 'AI 说话中...',
   error: '出现错误，请重试',
@@ -64,7 +65,9 @@ export default function VoiceChat({
   }, []);
 
   const isMicDisabled =
-    sessionState === 'processing' || sessionState === 'speaking';
+    sessionState === 'processing' ||
+    sessionState === 'transcribing' ||
+    sessionState === 'speaking';
 
   return (
     <div className="practice-session">
@@ -126,7 +129,7 @@ export default function VoiceChat({
           }
           id="mic-button"
         >
-          {sessionState === 'processing' ? (
+          {sessionState === 'processing' || sessionState === 'transcribing' ? (
             <svg
               width="28"
               height="28"
