@@ -18,6 +18,9 @@ export type ProviderType =
   | 'openai-compatible'
   | 'free';
 
+/** Which engine produces the AI's spoken audio. */
+export type TTSSource = 'browser' | 'api';
+
 export interface ApiConfig {
   provider: ProviderType;
   apiKey?: string;
@@ -26,6 +29,19 @@ export interface ApiConfig {
   voiceMode: VoiceMode;
   ttsVoice?: string;
   ttsRate?: number;
+  // ─── TTS (text-to-speech) output ───────────────────────────
+  /** Engine for the AI's voice. 'browser' (default) uses the free Web Speech
+   *  SpeechSynthesis; 'api' uses a cloud TTS (Xiaomi MiMo) for natural audio. */
+  ttsSource?: TTSSource;
+  /** Preset voice name for the API TTS (e.g. Xiaomi 'Chloe'/'Mia'/'Milo'/'Dean'). */
+  ttsApiVoice?: string;
+  /** Optional user-supplied TTS API key. When blank, the server-side built-in
+   *  key (XIAOMI_TTS_API_KEY) is used so no key is exposed to the browser. */
+  ttsApiKey?: string;
+  /** Optional override for the TTS API base URL (defaults to Xiaomi MiMo). */
+  ttsApiBaseUrl?: string;
+  /** Optional override for the TTS model (defaults to mimo-v2.5-tts). */
+  ttsApiModel?: string;
 }
 
 // --- Scenarios ---
@@ -194,6 +210,17 @@ export interface TTSOptions {
   voice?: string;
   rate?: number;
   pitch?: number;
+  /** Which engine to use for this utterance. Defaults to 'browser'. */
+  source?: TTSSource;
+  /** Preset voice name for the API TTS engine. */
+  apiVoice?: string;
+  /** Optional user-supplied credentials/overrides for the API TTS engine.
+   *  When omitted, the server falls back to its built-in key/defaults. */
+  apiConfig?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+  };
 }
 
 // --- Voice Session State ---

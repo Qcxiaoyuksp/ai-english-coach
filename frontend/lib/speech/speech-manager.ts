@@ -10,6 +10,7 @@ import { TTSOptions } from '@/types';
 import { SpeechServiceState, MicPermissionStatus } from './types';
 import { WebSpeechSTT } from './web-speech-stt';
 import { WebSpeechTTS } from './web-speech-tts';
+import { ApiTTS } from './api-tts';
 
 export interface SpeechManagerCallbacks {
   /** Called when the overall state changes */
@@ -33,6 +34,7 @@ export interface SpeechManagerCallbacks {
 export class SpeechManager {
   private stt: WebSpeechSTT;
   private tts: WebSpeechTTS;
+  private apiTts: ApiTTS;
   private _state: SpeechServiceState = 'idle';
   private callbacks: SpeechManagerCallbacks;
 
@@ -80,6 +82,11 @@ export class SpeechManager {
         this.callbacks.onSpeakEnd?.();
       }
     };
+
+    // Initialize API TTS (cloud, optional). It plays independently; the
+    // SpeechManager owns the 'speaking' state for both engines, so we don't
+    // wire its onEnd into a state change here.
+    this.apiTts = new ApiTTS();
   }
 
   // ─── State ──────────────────────────────────────────────────
@@ -187,6 +194,10 @@ export class SpeechManager {
   /**
    * Speak the given text.
    * Will stop listening before speaking to avoid echo/feedback.
+   *
+   * When `options.source === 'api'`, the cloud TTS is used; if it fails for
+   * any reason (no key, network, playback) we transparently fall back to the
+   * browser TTS so the conversation never goes silent.
    */
   async speak(text: string, options?: TTSOptions): Promise<void> {
     // Stop listening to avoid echo
@@ -196,7 +207,20 @@ export class SpeechManager {
 
     this.setState('speaking');
     try {
-      await this.tts.speak(text, options);
+      if (options?.source === 'api') {
+        try {
+          await this.apiTts.speak(text, options);
+        } catch (err) {
+          console.warn(
+            '[SpeechManager] API TTS failed, falling back to browser TTS:',
+            err,
+          );
+          // Fall back to the browser engine so the reply is still spoken.
+          await this.tts.speak(text, options);
+        }
+      } else {
+        await this.tts.speak(text, options);
+      }
     } finally {
       if (this._state === 'speaking') {
         this.setState('idle');
@@ -210,6 +234,7 @@ export class SpeechManager {
    */
   stopSpeaking(): void {
     this.tts.stop();
+    this.apiTts.stop();
     if (this._state === 'speaking') {
       this.setState('idle');
     }
@@ -237,6 +262,7 @@ export class SpeechManager {
   reset(): void {
     this.stt.stop();
     this.tts.stop();
+    this.apiTts.stop();
     this.setState('idle');
   }
 
