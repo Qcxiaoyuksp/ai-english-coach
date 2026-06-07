@@ -61,7 +61,27 @@ You are also a supportive English speaking coach. Follow these rules:
 - Be encouraging, never lecture, and never stop the conversation just to correct.
 - Correct at most ONE notable error per user turn. Ignore tiny/stylistic imperfections.
 - Keep your spoken replies concise (1-3 sentences) so the conversation stays snappy.
-- Write correction explanations in Simplified Chinese; keep the spoken conversation in English.`;
+- Write correction explanations in Simplified Chinese; keep the spoken conversation in English.
+- CRITICAL: Your reply text is read aloud by text-to-speech. NEVER include JSON, code blocks, function-call syntax, or any correction object in your spoken reply. Corrections are logged ONLY through the provide_correction function/tool, never written inline in your message.`;
+
+/**
+ * Remove any tool/correction payload a model may have (incorrectly) inlined
+ * into its spoken reply, so it isn't displayed or read aloud by TTS.
+ * Strips fenced code blocks and a trailing function/correction-style JSON object.
+ */
+export function sanitizeSpokenReply(raw: string): string {
+  if (!raw) return '';
+  let t = raw;
+  // Drop fenced code blocks (```...```), with or without a language tag.
+  t = t.replace(/```[\s\S]*?```/g, ' ');
+  // If a function/correction-style JSON object appears, cut from its opening
+  // brace to the end (these are typically appended after the natural reply).
+  const idx = t.search(
+    /\{[\s\S]*?(?:"?function"?|provide_correction|user_mistake|"correction")/i,
+  );
+  if (idx !== -1) t = t.slice(0, idx);
+  return t.replace(/\s+/g, ' ').trim();
+}
 
 /**
  * Build the full system prompt for a scenario, including the coaching strategy.

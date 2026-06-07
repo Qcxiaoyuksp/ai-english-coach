@@ -20,7 +20,7 @@ import {
   Session,
   TTSOptions,
 } from '@/types';
-import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
+import { CORRECTION_TOOL, buildSystemPrompt, sanitizeSpokenReply } from '@/lib/prompts';
 import { generateFreeReply } from '@/lib/free-coach';
 import { buildLocalReport } from '@/lib/analyzer';
 import {
@@ -283,6 +283,11 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
           });
           freeResponseIdx.current++;
         }
+
+        // Strip any tool/correction payload the model may have inlined into
+        // its reply so it isn't displayed or read aloud. Keep a safe fallback.
+        aiResponse = sanitizeSpokenReply(aiResponse);
+        if (!aiResponse) aiResponse = 'Got it. Please, go on.';
 
         // Add AI message
         const aiMsg: Message = {
