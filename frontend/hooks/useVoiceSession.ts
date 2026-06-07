@@ -23,6 +23,7 @@ import {
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
 import { generateFreeReply } from '@/lib/free-coach';
 import { saveSession, saveDraft, getDraft, clearDraft } from '@/lib/storage';
+import { AudioRecorder, transcribeAudio } from '@/lib/speech/recorder';
 
 export interface UseVoiceSessionReturn {
   startSession: () => void;
@@ -118,6 +119,9 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const startTimeRef = useRef<number>(draft?.startTime ?? 0);
   const listenStartRef = useRef<number>(0);
   const scenarioRef = useRef(scenario);
+  // Cloud ASR (API mode) recording state.
+  const recorderRef = useRef<AudioRecorder | null>(null);
+  const apiRecordingRef = useRef(false);
   const handleUserMessageRef = useRef<((text: string, meta?: { confidence?: number; durationMs?: number }) => Promise<void>) | null>(null);
 
   // Keep refs in sync via effects
@@ -329,6 +333,12 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   const endSession = useCallback((): string | null => {
     webSpeech.stopListening();
     webSpeech.stopSpeaking();
+    // Abort any in-progress cloud-ASR recording.
+    if (recorderRef.current) {
+      recorderRef.current.cancel();
+      recorderRef.current = null;
+    }
+    apiRecordingRef.current = false;
     setIsActive(false);
     setSessionState('idle');
     isProcessingRef.current = false;
@@ -367,9 +377,74 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
   // Tap once to start recording; tap again to stop. Stopping submits the
   // entire accumulated utterance to the AI — natural pauses no longer cut
   // the user off mid-sentence.
+  //
+  // Two engines:
+  //  • browser (default): Web Speech accumulates an interim+final transcript.
+  //  • api: MediaRecorder records a full clip, then the server-side ASR
+  //    transcribes it (more accurate, immune to pause-based cutoffs).
   const toggleListening = useCallback(() => {
-    if (sessionState === 'speaking' || sessionState === 'processing') return;
+    if (
+      sessionState === 'speaking' ||
+      sessionState === 'processing' ||
+      sessionState === 'transcribing'
+    ) {
+      return;
+    }
 
+    const useApiAsr = configRef.current.asrSource === 'api';
+
+    // ─── Cloud ASR (record → transcribe) ─────────────────────
+    if (useApiAsr) {
+      if (apiRecordingRef.current) {
+        // Stop recording and transcribe.
+        apiRecordingRef.current = false;
+        const recorder = recorderRef.current;
+        recorderRef.current = null;
+        const durationMs = listenStartRef.current
+          ? Date.now() - listenStartRef.current
+          : undefined;
+        setSessionState('transcribing');
+        (async () => {
+          try {
+            if (!recorder) throw new Error('录音未开始');
+            const blob = await recorder.stop();
+            const text = await transcribeAudio(blob, configRef.current);
+            if (text && !isProcessingRef.current) {
+              await handleUserMessageRef.current?.(text, { durationMs });
+            } else {
+              setSessionState('idle');
+            }
+          } catch (err) {
+            console.error('[useVoiceSession] Cloud ASR failed:', err);
+            const errorMsg: Message = {
+              id: generateId(),
+              role: 'assistant',
+              content:
+                '抱歉，语音识别失败了。请再说一次，或在设置中切换为浏览器识别。',
+              timestamp: Date.now(),
+            };
+            setMessages((prev) => [...prev, errorMsg]);
+            setSessionState('idle');
+          }
+        })();
+      } else {
+        // Start recording.
+        const recorder = new AudioRecorder();
+        recorderRef.current = recorder;
+        listenStartRef.current = Date.now();
+        setSessionState('listening');
+        recorder.start().catch((err) => {
+          console.error('[useVoiceSession] Failed to start recording:', err);
+          apiRecordingRef.current = false;
+          recorderRef.current = null;
+          setSessionState('idle');
+        });
+        apiRecordingRef.current = true;
+      }
+      return;
+    }
+
+    // ─── Browser Web Speech ──────────────────────────────────
     if (webSpeech.isListening) {
       webSpeech.stopListening();
       const { transcript, confidence } = webSpeech.getResult();
@@ -398,6 +473,13 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     setSessionState('idle');
   }, [webSpeech]);
 
+  // Capability depends on the selected ASR engine: cloud ASR needs
+  // MediaRecorder (works in Edge/Firefox too), browser ASR needs Web Speech.
+  const isSupported =
+    configRef.current.asrSource === 'api'
+      ? AudioRecorder.isSupported()
+      : webSpeech.isSupported;
+
   return {
     startSession,
     endSession,
@@ -409,7 +491,7 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
     isActive,
     interimTranscript,
     elapsedSeconds,
-    isSupported: webSpeech.isSupported,
+    isSupported,
     micPermission: webSpeech.micPermission,
     requestMicPermission: webSpeech.requestMicPermission,
     resumed,

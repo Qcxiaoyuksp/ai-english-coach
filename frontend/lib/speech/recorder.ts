@@ -1,0 +1,149 @@
+// ============================================================
+// AudioRecorder — MediaRecorder wrapper for cloud ASR
+// ============================================================
+// Records a full microphone clip via MediaRecorder. Unlike the browser's
+// Web Speech recognition, recording only ends when the caller explicitly
+// stops — natural pauses never cut the utterance short. The resulting Blob is
+// uploaded to the server-side /api/asr proxy for transcription.
+// ============================================================
+
+import { ApiConfig } from '@/types';
+
+/** Preferred recording MIME types, in order. The browser picks the first it
+ *  supports; SiliconFlow accepts common containers (webm/opus, mp4/aac). */
+const PREFERRED_MIME_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/ogg;codecs=opus',
+];
+
+export class AudioRecorder {
+  private mediaRecorder: MediaRecorder | null = null;
+  private stream: MediaStream | null = null;
+  private chunks: Blob[] = [];
+
+  /** Whether this browser can record audio at all. */
+  static isSupported(): boolean {
+    return (
+      typeof window !== 'undefined' &&
+      typeof MediaRecorder !== 'undefined' &&
+      typeof navigator !== 'undefined' &&
+      !!navigator.mediaDevices?.getUserMedia
+    );
+  }
+
+  private pickMimeType(): string | undefined {
+    if (typeof MediaRecorder === 'undefined') return undefined;
+    return PREFERRED_MIME_TYPES.find((t) => {
+      try {
+        return MediaRecorder.isTypeSupported(t);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  isRecording(): boolean {
+    return this.mediaRecorder?.state === 'recording';
+  }
+
+  /** Request the mic and begin recording. Throws if permission is denied. */
+  async start(): Promise<void> {
+    if (!AudioRecorder.isSupported()) {
+      throw new Error('此浏览器不支持录音 (MediaRecorder)');
+    }
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = this.pickMimeType();
+    this.mediaRecorder = new MediaRecorder(
+      this.stream,
+      mimeType ? { mimeType } : undefined,
+    );
+    this.chunks = [];
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) this.chunks.push(e.data);
+    };
+    this.mediaRecorder.start();
+  }
+
+  /**
+   * Stop recording and resolve with the recorded audio Blob.
+   * Always releases the microphone stream.
+   */
+  stop(): Promise<Blob> {
+    return new Promise<Blob>((resolve, reject) => {
+      const recorder = this.mediaRecorder;
+      if (!recorder) {
+        this.releaseStream();
+        reject(new Error('录音尚未开始'));
+        return;
+      }
+      recorder.onstop = () => {
+        const type = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(this.chunks, { type });
+        this.chunks = [];
+        this.mediaRecorder = null;
+        this.releaseStream();
+        resolve(blob);
+      };
+      try {
+        recorder.stop();
+      } catch (err) {
+        this.releaseStream();
+        reject(err instanceof Error ? err : new Error('停止录音失败'));
+      }
+    });
+  }
+
+  /** Abort recording without producing a clip. */
+  cancel(): void {
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      this.mediaRecorder.onstop = null;
+      try {
+        this.mediaRecorder.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.mediaRecorder = null;
+    this.chunks = [];
+    this.releaseStream();
+  }
+
+  private releaseStream(): void {
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
+  }
+}
+
+/** File extension that matches a recorded Blob's MIME type. */
+function extensionForBlob(blob: Blob): string {
+  if (blob.type.includes('mp4')) return 'mp4';
+  if (blob.type.includes('ogg')) return 'ogg';
+  return 'webm';
+}
+
+/**
+ * Upload a recorded clip to the server-side /api/asr proxy and return the
+ * transcribed text. Throws on failure so the caller can surface an error.
+ */
+export async function transcribeAudio(
+  blob: Blob,
+  config: ApiConfig,
+): Promise<string> {
+  const form = new FormData();
+  form.append('file', blob, `audio.${extensionForBlob(blob)}`);
+  if (config.asrApiModel) form.append('model', config.asrApiModel);
+  if (config.asrApiKey) form.append('apiKey', config.asrApiKey);
+  if (config.asrApiBaseUrl) form.append('baseUrl', config.asrApiBaseUrl);
+
+  const response = await fetch('/api/asr', { method: 'POST', body: form });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `ASR request failed: ${response.status}`);
+  }
+  const data = await response.json();
+  return (data.text || '').trim();
+}

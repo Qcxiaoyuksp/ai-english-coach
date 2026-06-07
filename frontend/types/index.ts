@@ -21,6 +21,9 @@ export type ProviderType =
 /** Which engine produces the AI's spoken audio. */
 export type TTSSource = 'browser' | 'api';
 
+/** Which engine transcribes the user's speech. */
+export type ASRSource = 'browser' | 'api';
+
 export interface ApiConfig {
   provider: ProviderType;
   apiKey?: string;
@@ -42,6 +45,18 @@ export interface ApiConfig {
   ttsApiBaseUrl?: string;
   /** Optional override for the TTS model (defaults to mimo-v2.5-tts). */
   ttsApiModel?: string;
+  // ─── ASR (speech-to-text) input ────────────────────────────
+  /** Engine for transcribing the user. 'browser' (default) uses Web Speech;
+   *  'api' records via MediaRecorder and transcribes through a cloud ASR
+   *  (SiliconFlow), which is more accurate and avoids pause-based cutoffs. */
+  asrSource?: ASRSource;
+  /** ASR model id (e.g. 'FunAudioLLM/SenseVoiceSmall' or 'TeleAI/TeleSpeechASR'). */
+  asrApiModel?: string;
+  /** Optional user-supplied ASR API key. When blank, the server-side built-in
+   *  key (SILICONFLOW_ASR_API_KEY) is used so no key is exposed to the browser. */
+  asrApiKey?: string;
+  /** Optional override for the ASR API base URL (defaults to SiliconFlow). */
+  asrApiBaseUrl?: string;
 }
 
 // --- Scenarios ---
@@ -228,6 +243,7 @@ export interface TTSOptions {
 export type VoiceSessionState =
   | 'idle'
   | 'listening'
+  | 'transcribing'
   | 'processing'
   | 'speaking'
   | 'error';
