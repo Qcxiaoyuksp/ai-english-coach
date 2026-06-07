@@ -106,6 +106,7 @@ function buildGroundedReport(
     highlights: [],
     suggestions,
     keyVocabulary,
+    generatedBy: 'llm',
   };
 }
 
@@ -132,24 +133,28 @@ export default function ReportPage({
 
     const generate = async () => {
       const cached = getReportBySession(sessionId);
-      if (cached) {
+      const config = loadApiConfig();
+      const useServerKey = usesBuiltinLLM(config);
+      const wantLLM =
+        config.voiceMode !== 'free' && (useServerKey || !!config.apiKey);
+
+      // A satisfactory cached report: any report in free mode, or an
+      // LLM-graded one in standard/advanced. (A local baseline auto-saved on
+      // session end is upgraded to an LLM report below.)
+      if (cached && (!wantLLM || cached.generatedBy === 'llm')) {
         setReport(cached);
         setStatus('ready');
         return;
       }
 
       const stats = analyzeConversation(sess);
-      const localReport = buildLocalReport(sess);
-      const config = loadApiConfig();
+      const localReport = cached ?? buildLocalReport(sess);
 
       let result: Report = localReport;
 
       // Use the LLM analyzer for non-free modes: built-in LLM (server key) or
       // the user's own key. Falls back to the local report on any failure.
-      const useServerKey = usesBuiltinLLM(config);
-      const canAnalyze =
-        config.voiceMode !== 'free' && (useServerKey || !!config.apiKey);
-      if (canAnalyze) {
+      if (wantLLM) {
         try {
           const res = await fetch('/api/analyze', {
             method: 'POST',

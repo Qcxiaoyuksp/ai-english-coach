@@ -241,6 +241,7 @@ export function buildLocalReport(session: Session): Report {
     highlights: [],
     suggestions,
     keyVocabulary: [],
+    generatedBy: 'local',
   };
 }
 
