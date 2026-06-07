@@ -178,5 +178,6 @@ describe('buildLocalReport', () => {
       corrected: 'He goes',
     });
     expect(report.suggestions.length).toBeGreaterThan(0);
+    expect(report.generatedBy).toBe('local');
   });
 });

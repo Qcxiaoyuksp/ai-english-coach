@@ -22,7 +22,15 @@ import {
 } from '@/types';
 import { CORRECTION_TOOL, buildSystemPrompt } from '@/lib/prompts';
 import { generateFreeReply } from '@/lib/free-coach';
-import { saveSession, saveDraft, getDraft, clearDraft } from '@/lib/storage';
+import { buildLocalReport } from '@/lib/analyzer';
+import {
+  saveSession,
+  saveDraft,
+  getDraft,
+  clearDraft,
+  saveReport,
+  getReportBySession,
+} from '@/lib/storage';
 import { AudioRecorder, transcribeAudio } from '@/lib/speech/recorder';
 import {
   loadApiConfig,
@@ -376,6 +384,17 @@ export function useVoiceSession(scenario: Scenario): UseVoiceSessionReturn {
 
     try {
       saveSession(session);
+      // Auto-generate a baseline report on session end so history/trends are
+      // always complete without requiring the user to open each report. The
+      // report page later upgrades this to an LLM-graded report (standard/
+      // advanced modes). Don't clobber an existing report (e.g. resumed view).
+      if (!getReportBySession(session.id)) {
+        try {
+          saveReport(buildLocalReport(session));
+        } catch (err) {
+          console.error('[useVoiceSession] Failed to auto-save report:', err);
+        }
+      }
     } catch (err) {
       console.error('[useVoiceSession] Failed to save session:', err);
       return null;

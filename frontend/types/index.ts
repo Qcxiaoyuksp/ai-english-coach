@@ -164,6 +164,10 @@ export interface Report {
   highlights: string[];
   suggestions: string[];
   keyVocabulary: VocabularyItem[];
+  /** How the report was produced: a local heuristic baseline (auto-generated
+   *  on session end) or an LLM-graded report. Lets the report page upgrade a
+   *  local baseline to an LLM report when opened. */
+  generatedBy?: 'local' | 'llm';
 }
 
 export interface ReportError {
