@@ -5,7 +5,8 @@
 > 界面中文、对话全英文。不填任何 API Key 即可用浏览器语音零成本体验；填入自己的大模型 Key 可获得高质量真实对话。
 
 🔗 **在线体验**：<https://ai-english-coach-ruby.vercel.app/>
-🎬 **Demo 视频**：https://www.bilibili.com/video/BV1XQE869EBU/
+
+🎬 **Demo 视频**：https://www.bilibili.com/video/BV1XQE869EBU/  （发现没录上系统声音啊！评委大大可以本地部署一下，是有声音的😢）
 
 > 在线体验为纯前端部署（Vercel）。推荐使用 Chrome / Edge 桌面浏览器；语音功能需授权麦克风（HTTPS 下生效）。不填 Key 即可体验免费模式。
 
