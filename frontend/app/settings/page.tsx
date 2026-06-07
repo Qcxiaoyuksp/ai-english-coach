@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ApiConfig, ProviderType, VoiceMode } from '@/types';
 import { useIsClient } from '@/hooks/useIsClient';
 import { DEFAULT_API_CONFIG, normalizeConfig } from '@/lib/config';
+import { createTestWavBlob, transcribeAudio } from '@/lib/speech/recorder';
 
 const PROVIDER_PRESETS: {
   id: ProviderType;
@@ -161,6 +162,14 @@ export default function SettingsPage() {
     'idle',
   );
   const [ttsPreviewMsg, setTtsPreviewMsg] = useState('');
+  const [asrTest, setAsrTest] = useState<'idle' | 'loading' | 'success' | 'error'>(
+    'idle',
+  );
+  const [asrTestMsg, setAsrTestMsg] = useState('');
+  const [ttsTest, setTtsTest] = useState<'idle' | 'loading' | 'success' | 'error'>(
+    'idle',
+  );
+  const [ttsTestMsg, setTtsTestMsg] = useState('');
   const [saved, setSaved] = useState(false);
   // Model list fetched via the server-side /api/models proxy.
   const [models, setModels] = useState<string[]>([]);
@@ -335,7 +344,10 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.playbackRate = config.ttsRate || 1.0;
-      audio.onended = () => URL.revokeObjectURL(url);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setTtsPreviewMsg('');
+      };
       await audio.play();
       setTtsPreview('idle');
       setTtsPreviewMsg('试听播放中…');
@@ -348,6 +360,72 @@ export default function SettingsPage() {
   const currentPreset = PROVIDER_PRESETS.find((p) => p.id === config.provider);
   const isCustomLLM = config.llmSource === 'custom';
   const isAdvanced = config.voiceMode === 'advanced';
+
+  // Lightweight connectivity test for a custom ASR API: send a short silent
+  // clip; a 200 response (even with empty text) means key/url/model work.
+  const testAsr = async () => {
+    if (!config.asrApiKey) {
+      setAsrTest('error');
+      setAsrTestMsg('请先填写 ASR API Key');
+      return;
+    }
+    setAsrTest('loading');
+    setAsrTestMsg('正在测试…');
+    try {
+      const text = await transcribeAudio(createTestWavBlob(), {
+        ...config,
+        asrApiKey: config.asrApiKey,
+        asrApiBaseUrl: config.asrApiBaseUrl,
+        asrApiModel: config.asrApiModel,
+      });
+      setAsrTest('success');
+      setAsrTestMsg(text ? `连接成功，识别到：“${text}”` : '连接成功，接口可用');
+    } catch (e) {
+      setAsrTest('error');
+      setAsrTestMsg(e instanceof Error ? e.message : '测试失败');
+    }
+  };
+
+  // Lightweight test for a custom TTS API: synthesize a short clip and play it.
+  const testTts = async () => {
+    if (!config.ttsApiKey) {
+      setTtsTest('error');
+      setTtsTestMsg('请先填写 TTS API Key');
+      return;
+    }
+    setTtsTest('loading');
+    setTtsTestMsg('正在测试…');
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: 'This is a TTS connection test.',
+          voice: config.ttsApiVoice,
+          apiKey: config.ttsApiKey,
+          baseUrl: config.ttsApiBaseUrl,
+          model: config.ttsApiModel,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setTtsTest('error');
+        setTtsTestMsg(data.error || `测试失败 (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.playbackRate = config.ttsRate || 1.0;
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+      setTtsTest('success');
+      setTtsTestMsg('连接成功，已播放测试语音');
+    } catch {
+      setTtsTest('error');
+      setTtsTestMsg('测试失败：网络错误');
+    }
+  };
 
   return (
     <div className="container">
@@ -531,7 +609,7 @@ export default function SettingsPage() {
                         className="btn btn-secondary btn-sm"
                         onClick={fetchModels}
                         disabled={modelStatus === 'loading'}
-                        style={{ whiteSpace: 'nowrap', minWidth: '7rem' }}
+                        style={{ whiteSpace: 'nowrap' }}
                       >
                         {modelStatus === 'loading' ? '获取中...' : '获取模型列表'}
                       </button>
@@ -686,6 +764,40 @@ export default function SettingsPage() {
                       placeholder="FunAudioLLM/SenseVoiceSmall"
                     />
                   </div>
+                  <div className="input-group settings-full-width">
+                    <label className="input-label">连接测试</label>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-3)',
+                      }}
+                    >
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={testAsr}
+                        disabled={asrTest === 'loading'}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        {asrTest === 'loading' ? '测试中...' : '🔍 测试 ASR'}
+                      </button>
+                      {asrTestMsg && (
+                        <span
+                          style={{
+                            fontSize: 'var(--text-xs)',
+                            color:
+                              asrTest === 'error'
+                                ? 'var(--color-accent-rose)'
+                                : asrTest === 'success'
+                                  ? 'var(--color-accent-emerald)'
+                                  : 'var(--color-text-muted)',
+                          }}
+                        >
+                          {asrTestMsg}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </>
               )}
             </div>
@@ -788,6 +900,40 @@ export default function SettingsPage() {
                         onChange={(e) => updateConfig({ ttsApiModel: e.target.value })}
                         placeholder="mimo-v2.5-tts"
                       />
+                    </div>
+                    <div className="input-group settings-full-width">
+                      <label className="input-label">连接测试</label>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 'var(--space-3)',
+                        }}
+                      >
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={testTts}
+                          disabled={ttsTest === 'loading'}
+                          style={{ whiteSpace: 'nowrap' }}
+                        >
+                          {ttsTest === 'loading' ? '测试中...' : '🔍 测试 TTS'}
+                        </button>
+                        {ttsTestMsg && (
+                          <span
+                            style={{
+                              fontSize: 'var(--text-xs)',
+                              color:
+                                ttsTest === 'error'
+                                  ? 'var(--color-accent-rose)'
+                                  : ttsTest === 'success'
+                                    ? 'var(--color-accent-emerald)'
+                                    : 'var(--color-text-muted)',
+                            }}
+                          >
+                            {ttsTestMsg}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </>
                 )}
