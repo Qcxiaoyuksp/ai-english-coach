@@ -1,6 +1,23 @@
 import { ChatMessage, ChatResponse, ApiConfig } from '@/types';
 
 /**
+ * Normalize a user-provided OpenAI-compatible Base URL into a clean base that
+ * the call layer can safely append `/chat/completions` or `/models` to.
+ *
+ * Accepts any of these shapes and returns the same base:
+ *   https://api.x.com/v1
+ *   https://api.x.com/v1/
+ *   https://api.x.com/v1/chat
+ *   https://api.x.com/v1/chat/completions
+ */
+export function normalizeBaseUrl(raw: string): string {
+  let url = (raw || '').trim().replace(/\/+$/, '');
+  // Strip a trailing endpoint path the user may have pasted in.
+  url = url.replace(/\/(chat\/completions|completions|chat)$/i, '');
+  return url;
+}
+
+/**
  * Creates an AI chat completion based on the configured provider.
  * Supports: OpenAI, Gemini, DeepSeek, Groq, and any OpenAI-compatible API.
  */
@@ -23,10 +40,7 @@ async function chatWithOpenAICompatible(
   messages: ChatMessage[],
   options?: { maxTokens?: number; temperature?: number; tools?: unknown[] }
 ): Promise<ChatResponse> {
-  const baseUrl = (config.baseUrl || 'https://api.openai.com/v1').replace(
-    /\/$/,
-    ''
-  );
+  const baseUrl = normalizeBaseUrl(config.baseUrl || 'https://api.openai.com/v1');
   const model = config.model || 'gpt-4o-mini';
 
   const body: Record<string, unknown> = {
@@ -127,4 +141,79 @@ async function chatWithGemini(
     data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
   return { content };
+}
+
+// ─── Model Listing ───────────────────────────────────────────────────────────
+
+/**
+ * Fetch the list of available model ids for the configured provider, using the
+ * user's API key. Runs server-side (see app/api/models/route.ts) so the key is
+ * never exposed to the browser.
+ */
+export async function listModels(config: ApiConfig): Promise<string[]> {
+  if (config.provider === 'gemini') {
+    const baseUrl = normalizeBaseUrl(
+      config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta'
+    );
+    const response = await fetch(
+      `${baseUrl}/models?key=${config.apiKey}`
+    );
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        errorData.error?.message || `Failed to list models: ${response.status}`
+      );
+    }
+    const data = await response.json();
+    return ((data.models as { name?: string }[]) || [])
+      .map((m) => (m.name || '').replace(/^models\//, ''))
+      .filter(Boolean);
+  }
+
+  // OpenAI-compatible: GET {base}/models. Some providers expose the list under
+  // a versioned path (e.g. SiliconFlow needs `/v1/models`), so when the user's
+  // Base URL has no explicit version segment we also try `{base}/v1/models`.
+  const base = normalizeBaseUrl(config.baseUrl || 'https://api.openai.com/v1');
+  const candidates = [base];
+  if (!/\/v\d+[a-z]*$/i.test(base)) {
+    candidates.push(`${base}/v1`);
+  }
+
+  let lastStatus = 0;
+  let lastMessage = '';
+  for (const candidate of candidates) {
+    const response = await fetch(`${candidate}/models`, {
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      // OpenAI shape: { data: [{ id }, ...] }. Some gateways use { models: [...] }.
+      const raw = (data.data || data.models || []) as {
+        id?: string;
+        name?: string;
+      }[];
+      return raw
+        .map((m) => m.id || m.name || '')
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+    }
+
+    // Auth/permission errors won't be fixed by trying another path — surface now.
+    if (response.status === 401 || response.status === 403) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        errorData.error?.message || `API Key 无效或无权限 (${response.status})`,
+      );
+    }
+
+    lastStatus = response.status;
+    const errorData = await response.json().catch(() => ({}));
+    lastMessage = errorData.error?.message || '';
+  }
+
+  throw new Error(
+    lastMessage ||
+      `无法获取模型列表 (${lastStatus})。该提供商可能不支持模型列表接口，请手动填写模型名称。`,
+  );
 }

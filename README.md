@@ -19,7 +19,7 @@
   - 对话中——通过 LLM function calling 实时捕捉语法 / 表达 / 用词问题，以轻量气泡（FeedbackBubble）即时提示，不打断对话节奏；
   - 课后——生成深度报告，逐条列出错误、修正建议与例句。
 - **📊 可解释的发音评测与六维报告**：课后报告含六维雷达图（发音、语法、词汇、流利度、自然度、任务完成度）。发音/流利度分数基于**真实信号**——语音识别置信度与语速（WPM）——算法透明、敢讲依据，而非模型臆造。
-- **🔌 多 Provider + 三段可配置架构**：ASR / LLM / TTS 三段解耦，各自可选「浏览器免费」或「API 高质量」。LLM 支持 OpenAI、Google Gemini、DeepSeek、Groq 及任意 OpenAI 兼容服务，按提供商分别记忆配置。
+- **🔌 多 Provider + 三段可配置架构**：ASR / LLM / TTS 三段解耦，各自可选「浏览器免费」或「API 高质量」。LLM 支持 OpenAI、Google Gemini、DeepSeek、Groq、智谱 GLM、硅基流动、ModelScope、OpenRouter 及任意 OpenAI 兼容服务，按提供商分别记忆配置，支持一键获取模型列表与 Base URL 自动容错。
 - **🆓 零成本可用**：不填 Key 即用浏览器内置语音 + 本地评测跑通全流程。
 - **↩️ 断点续接**：练习中途离开页面，返回时自动恢复对话进度，不丢上下文。
 - **🗂️ 历史记录与回看**：所有练习与报告本地留存，可查看平均分趋势并回看任意一次报告。
@@ -128,8 +128,16 @@ npm run lint    # 单独执行 ESLint
 | **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta` | `gemini-2.0-flash` | **有免费额度，推荐初次使用** |
 | **DeepSeek** | `https://api.deepseek.com/v1` | `deepseek-chat` | 高性价比，中文能力强（演示默认） |
 | **Groq** | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | 极速推理，有免费额度 |
+| **智谱 GLM** | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | `glm-4-flash` 免费，中文能力强 |
+| **硅基流动 SiliconFlow** | `https://api.siliconflow.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` | 聚合多家开源模型，有免费额度 |
+| **ModelScope 魔搭** | `https://api-inference.modelscope.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` | 魔搭社区免费推理 API |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` | 一个 Key 聚合众多模型 |
 | **OpenAI** | `https://api.openai.com/v1` | `gpt-4o-mini` | 支持 GPT-4o |
 | **自定义（OpenAI 兼容）** | 自填 | 自填 | 支持任意 OpenAI 兼容 API |
+
+> **更省心的配置体验**：
+> - **Base URL 容错**——无论填 `.../v1`、`.../v1/`、`.../v1/chat`，还是整段 `.../v1/chat/completions`，都会被自动归一化，不会因结尾写法不同而报错。
+> - **一键获取模型列表**——填好 Key 后点「获取模型列表」，由服务端代理拉取该提供商的可用模型并下拉选择（也可手动填写）。
 
 > **想免费体验真实对话？** 推荐到 [Google AI Studio](https://aistudio.google.com/) 免费申请 Gemini API Key，在设置页选择 Google Gemini 填入即可。
 

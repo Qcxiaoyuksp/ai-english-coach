@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ApiConfig, ProviderType, VoiceMode } from '@/types';
 import { useIsClient } from '@/hooks/useIsClient';
 
@@ -22,14 +22,14 @@ const PROVIDER_PRESETS: {
     id: 'gemini',
     label: 'Google Gemini',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-2.5-flash',
     description: '有免费额度，推荐初次使用',
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
     defaultBaseUrl: 'https://api.deepseek.com/v1',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
     description: '高性价比，中文能力强',
   },
   {
@@ -38,6 +38,34 @@ const PROVIDER_PRESETS: {
     defaultBaseUrl: 'https://api.groq.com/openai/v1',
     defaultModel: 'llama-3.3-70b-versatile',
     description: '极速推理，有免费额度',
+  },
+  {
+    id: 'zhipu',
+    label: '智谱 GLM',
+    defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    defaultModel: 'glm-4.7-flash',
+    description: 'glm-4.7-flash 免费，中文能力强',
+  },
+  {
+    id: 'siliconflow',
+    label: '硅基流动',
+    defaultBaseUrl: 'https://api.siliconflow.cn/v1',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+    description: '聚合多家开源模型，有免费额度',
+  },
+  {
+    id: 'modelscope',
+    label: 'ModelScope 魔搭',
+    defaultBaseUrl: 'https://api-inference.modelscope.cn/v1',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+    description: '魔搭社区免费推理 API',
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    defaultModel: 'openai/gpt-4o-mini',
+    description: '一个 Key 聚合众多模型',
   },
   {
     id: 'openai-compatible',
@@ -126,6 +154,29 @@ export default function SettingsPage() {
   const [testMessage, setTestMessage] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Model list fetched via the server-side /api/models proxy.
+  const [models, setModels] = useState<string[]>([]);
+  const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'error'>(
+    'idle',
+  );
+  const [modelMessage, setModelMessage] = useState('');
+  const [showModelList, setShowModelList] = useState(false);
+  const modelWrapRef = useRef<HTMLDivElement>(null);
+
+  // Close the model dropdown when clicking anywhere outside of it. Uses a
+  // document listener (rather than a fixed overlay) because ancestor elements
+  // use backdrop-filter, which would confine a position:fixed overlay to that
+  // ancestor's box instead of the full viewport.
+  useEffect(() => {
+    if (!showModelList) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (modelWrapRef.current && !modelWrapRef.current.contains(e.target as Node)) {
+        setShowModelList(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [showModelList]);
 
   // Derive config: default during SSR/first render, saved value once on client,
   // then the user's latest edits. Avoids hydration mismatch and setState-in-effect.
@@ -152,6 +203,14 @@ export default function SettingsPage() {
     ) {
       setTestStatus('idle');
       setTestMessage('');
+    }
+    // The fetched model list is tied to a specific provider/credentials —
+    // drop it when those change so a stale list isn't shown.
+    if ('provider' in partial || 'apiKey' in partial || 'baseUrl' in partial) {
+      setModels([]);
+      setModelStatus('idle');
+      setModelMessage('');
+      setShowModelList(false);
     }
   };
 
@@ -180,6 +239,41 @@ export default function SettingsPage() {
             ? 'standard'
             : config.voiceMode,
     });
+  };
+
+  // Fetch the available model list from the provider via our server proxy.
+  const fetchModels = async () => {
+    if (!config.apiKey) {
+      setModelStatus('error');
+      setModelMessage('请先输入 API Key');
+      return;
+    }
+    setModelStatus('loading');
+    setModelMessage('正在获取模型列表...');
+    try {
+      const response = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config }),
+      });
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.models)) {
+        setModels(data.models);
+        if (data.models.length === 0) {
+          setModelStatus('error');
+          setModelMessage('未获取到任何模型，请手动填写模型名称');
+        } else {
+          setModelStatus('idle');
+          setModelMessage(`已获取 ${data.models.length} 个模型`);
+        }
+      } else {
+        setModelStatus('error');
+        setModelMessage(data.error || `获取失败 (${response.status})`);
+      }
+    } catch {
+      setModelStatus('error');
+      setModelMessage('获取失败：网络错误');
+    }
   };
 
   // Test API connection
@@ -335,14 +429,77 @@ export default function SettingsPage() {
               </div>
 
               {/* Model */}
-              <div className="input-group">
+              <div className="input-group" style={{ position: 'relative' }}>
                 <label className="input-label">模型名称</label>
-                <input
-                  className="input"
-                  value={config.model || ''}
-                  onChange={(e) => updateConfig({ model: e.target.value })}
-                  placeholder={currentPreset?.defaultModel || 'gpt-4o-mini'}
-                />
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 'var(--space-2)',
+                    alignItems: 'center',
+                  }}
+                >
+                  <input
+                    className="input"
+                    style={{ flex: 1 }}
+                    value={config.model || ''}
+                    onChange={(e) => updateConfig({ model: e.target.value })}
+                    placeholder={currentPreset?.defaultModel || 'gpt-4o-mini'}
+                  />
+                  {models.length > 0 && (
+                    <div className="model-select-wrap" ref={modelWrapRef}>
+                      <button
+                        type="button"
+                        className="model-select-toggle"
+                        onClick={() => setShowModelList((v) => !v)}
+                        aria-label="从列表选择模型"
+                        aria-expanded={showModelList}
+                        title="从已获取的模型列表选择"
+                      >
+                        ▾
+                      </button>
+                      {showModelList && (
+                        <div className="model-dropdown" role="listbox">
+                          {models.map((m) => (
+                            <button
+                              type="button"
+                              key={m}
+                              className={`model-dropdown-item ${config.model === m ? 'active' : ''}`}
+                              role="option"
+                              aria-selected={config.model === m}
+                              onClick={() => {
+                                updateConfig({ model: m });
+                                setShowModelList(false);
+                              }}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={fetchModels}
+                    disabled={modelStatus === 'loading'}
+                    style={{ whiteSpace: 'nowrap', minWidth: '7rem' }}
+                  >
+                    {modelStatus === 'loading' ? '获取中...' : '获取模型列表'}
+                  </button>
+                </div>
+                {modelMessage && (
+                  <p
+                    className="model-status-msg"
+                    style={{
+                      color:
+                        modelStatus === 'error'
+                          ? 'var(--color-accent-rose)'
+                          : 'var(--color-text-muted)',
+                    }}
+                  >
+                    {modelMessage}
+                  </p>
+                )}
               </div>
             </div>
 

@@ -11,6 +11,10 @@ export type ProviderType =
   | 'gemini'
   | 'deepseek'
   | 'groq'
+  | 'zhipu'
+  | 'openrouter'
+  | 'siliconflow'
+  | 'modelscope'
   | 'openai-compatible'
   | 'free';
 
