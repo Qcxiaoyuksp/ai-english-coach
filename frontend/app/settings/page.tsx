@@ -86,7 +86,7 @@ const VOICE_MODES: {
     mode: 'free',
     icon: '🟢',
     name: '免费模式',
-    desc: '浏览器语音，无需 API Key',
+    desc: '零配置 · 浏览器语音 + 内置 AI 对话',
   },
   {
     mode: 'standard',
