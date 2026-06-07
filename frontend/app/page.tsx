@@ -13,13 +13,19 @@ import { useIsClient } from '@/hooks/useIsClient';
 import ScenarioCreator from '@/components/ScenarioCreator';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
-function checkApiKey(): boolean {
-  if (typeof window === 'undefined') return false;
+function getVoiceModeInfo(): { voiceMode: string; hasApiKey: boolean } {
+  if (typeof window === 'undefined') return { voiceMode: 'free', hasApiKey: false };
   try {
     const config = localStorage.getItem('api-config');
-    if (config) return !!JSON.parse(config).apiKey;
+    if (config) {
+      const parsed = JSON.parse(config);
+      return {
+        voiceMode: parsed.voiceMode || 'free',
+        hasApiKey: !!parsed.apiKey,
+      };
+    }
   } catch { /* ignore */ }
-  return false;
+  return { voiceMode: 'free', hasApiKey: false };
 }
 
 export default function HomePage() {
@@ -31,7 +37,19 @@ export default function HomePage() {
   // Browser-only values; default to empty/false during SSR + first render.
   const customScenarios =
     customOverride ?? (isClient ? listCustomScenarios() : []);
-  const hasApiKey = isClient ? checkApiKey() : false;
+  const { voiceMode, hasApiKey } = isClient
+    ? getVoiceModeInfo()
+    : { voiceMode: 'free', hasApiKey: false };
+  // A mode that relies on a user-supplied LLM key but has none configured.
+  const needsApiKey = voiceMode !== 'free' && !hasApiKey;
+  const modeBadgeLabel =
+    voiceMode === 'realtime'
+      ? '高级模式'
+      : voiceMode === 'standard'
+        ? hasApiKey
+          ? '标准模式 · 已配置 API'
+          : '标准模式 · 未配置 Key'
+        : '免费模式 · 浏览器语音';
 
   const allScenarios = [...BUILT_IN_SCENARIOS, ...customScenarios];
 
@@ -55,9 +73,9 @@ export default function HomePage() {
       <section className="hero animate-fade-in">
         <div className="hero-badge">
           <span
-            className={`hero-badge-dot ${hasApiKey ? '' : 'warning'}`}
+            className={`hero-badge-dot ${needsApiKey ? 'warning' : ''}`}
           />
-          {hasApiKey ? '已配置 API · 标准模式' : '免费模式 · 浏览器语音'}
+          {modeBadgeLabel}
         </div>
         <h1 className="hero-title">
           AI <span className="gradient-text">English Coach</span>
@@ -67,7 +85,7 @@ export default function HomePage() {
           <br />
           AI 教练将与你进行沉浸式对话，实时纠错，并在练习结束后给出详细评估报告。
         </p>
-        {!hasApiKey && (
+        {needsApiKey && (
           <Link href="/settings" className="btn btn-secondary btn-sm" style={{ marginTop: '0.5rem' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
             配置 API 获取更好体验
